@@ -11,16 +11,17 @@ a{color:#8bd5ca}progress{width:100%;margin-top:12px}
 <p id="chosen" class="muted">No files selected</p><progress id="bar" max="100" value="0"></progress><p id="status">Ready</p></section>
 <section class="card"><h2>Files on Android</h2><div id="list">Loading…</div></section>
 <script>
-const input=document.querySelector('#files'),status=document.querySelector('#status'),bar=document.querySelector('#bar');let selected=[];
+const input=document.querySelector('#files'),status=document.querySelector('#status'),bar=document.querySelector('#bar');let selected=[],currentPath='';
 const fmt=n=>n<1048576?(n/1024).toFixed(1)+' KB':(n/1048576).toFixed(1)+' MB';
 input.onchange=()=>{selected=[...input.files];document.querySelector('#chosen').textContent=selected.length+' file(s) selected'};
 document.querySelector('#send').onclick=async()=>{if(!selected.length){status.textContent='Select files first';return}
 let done=0,total=selected.reduce((a,f)=>a+f.size,0),sent=0;bar.value=0;
 for(const f of selected){status.textContent='Uploading '+f.name+' ('+(done+1)+'/'+selected.length+')';
-try{const r=await fetch('/files/'+encodeURIComponent(f.name),{method:'PUT',body:f});if(!r.ok)throw Error('HTTP '+r.status);done++;sent+=f.size;bar.value=total?sent/total*100:100}
+try{const r=await fetch('__SHARE_PATH__/'+(currentPath?currentPath+'/':'')+encodeURIComponent(f.name),{method:'PUT',body:f});if(!r.ok)throw Error('HTTP '+r.status);done++;sent+=f.size;bar.value=total?sent/total*100:100}
 catch(e){status.textContent+=' • Failed: '+e.message}}
 status.textContent='Uploaded '+done+'/'+selected.length+' files';selected=[];input.value='';document.querySelector('#chosen').textContent='No files selected';refresh()};
-async function refresh(){const box=document.querySelector('#list');try{const fs=await(await fetch('/api/files')).json();box.innerHTML='';
-if(!fs.length){box.textContent='No files yet';return}for(const f of fs){const row=document.createElement('div');row.className='row';const n=document.createElement('span');n.textContent=f.name+' · '+fmt(f.size);const a=document.createElement('a');a.href='/files/'+encodeURIComponent(f.name);a.textContent='Download';row.append(n,a);box.append(row)}}catch(e){box.textContent='Could not load files: '+e.message}}
+async function refresh(){const box=document.querySelector('#list');try{const fs=await(await fetch('/api/files?path='+encodeURIComponent(currentPath))).json();box.innerHTML='';
+const up=document.createElement('button');up.textContent='↑ Parent folder';up.disabled=!currentPath;up.onclick=()=>{currentPath=currentPath.split('/').slice(0,-1).join('/');refresh()};box.append(up);
+if(!fs.length){const empty=document.createElement('p');empty.textContent='No files in this folder';box.append(empty);return}for(const f of fs){const row=document.createElement('div');row.className='row';const n=document.createElement('span');n.textContent=(f.directory?'📁 ':'')+f.name+(f.directory?'':' · '+fmt(f.size));if(f.directory){n.style.cursor='pointer';n.onclick=()=>{currentPath=currentPath?currentPath+'/'+f.name:f.name;refresh()};row.append(n)}else{const a=document.createElement('a');a.href='__SHARE_PATH__/'+(currentPath?currentPath+'/':'')+encodeURIComponent(f.name);a.textContent='Download';row.append(n,a)}box.append(row)}}catch(e){box.textContent='Could not load files: '+e.message}}
 refresh();
 </script></body></html>
