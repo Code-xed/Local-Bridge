@@ -37,7 +37,7 @@ class LocalBridgeServer(ctx:Context, private val root:File):NanoHTTPD("0.0.0.0",
   File(body).inputStream().use { input -> FileOutputStream(tmp).use { output -> input.copyTo(output,1024*1024) } }
   if(dst.exists()) dst.delete()
   if(!tmp.renameTo(dst)){tmp.copyTo(dst,true);tmp.delete()}
-  return newFixedLengthResponse(Response.Status.CREATED,"application/json","{\\"ok\\":true}")
+  return newFixedLengthResponse(Response.Status.CREATED,"application/json",org.json.JSONObject().put("ok",true).toString())
  }
  private fun get(p:String):Response { val f=File(root,name(p)); if(!f.isFile)return newFixedLengthResponse(Response.Status.NOT_FOUND,"text/plain","")
   return newChunkedResponse(Response.Status.OK,"application/octet-stream",FileInputStream(f))

@@ -44,13 +44,25 @@ class MainActivity : ComponentActivity() {
   }
  }
  override fun onDestroy(){ server?.stop(); server=null; super.onDestroy() }
- private fun lanIp():String? = try {
-  val nets=NetworkInterface.getNetworkInterfaces()
-  while(nets.hasMoreElements()){ val n=nets.nextElement(); if(!n.isUp||n.isLoopback) continue
-   val ips=n.inetAddresses
-   while(ips.hasMoreElements()){ val a=ips.nextElement()
-    if(a is java.net.Inet4Address && !a.isLoopbackAddress && !a.hostAddress.orEmpty().startsWith("169.254.")) return a.hostAddress
+ private fun lanIp(): String? {
+  return try {
+   val nets = NetworkInterface.getNetworkInterfaces()
+   while (nets.hasMoreElements()) {
+    val network = nets.nextElement()
+    if (!network.isUp || network.isLoopback) continue
+    val addresses = network.inetAddresses
+    while (addresses.hasMoreElements()) {
+     val address = addresses.nextElement()
+     if (address is java.net.Inet4Address &&
+      !address.isLoopbackAddress &&
+      !address.hostAddress.orEmpty().startsWith("169.254.")) {
+      return address.hostAddress
+     }
+    }
    }
-  }; null
- } catch(_:Exception){null}
+   null
+  } catch (_: Exception) {
+   null
+  }
+ }
 }
