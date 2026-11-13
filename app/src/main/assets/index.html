@@ -1,0 +1,26 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#101827"><title>LocalBridge</title>
+<style>
+*{box-sizing:border-box}body{margin:auto;padding:24px;max-width:720px;background:#101827;color:#f4f7fb;font:16px system-ui}
+.card{background:#1b293c;border:1px solid #33445b;border-radius:18px;padding:18px;margin:18px 0}
+button,.pick{display:inline-block;background:#8bd5ca;color:#10202a;border:0;border-radius:12px;padding:13px 17px;font-weight:700}
+input{display:none}.muted{color:#a8b4c7}.row{display:flex;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid #33445b;overflow-wrap:anywhere}
+a{color:#8bd5ca}progress{width:100%;margin-top:12px}
+</style></head><body><h1>LocalBridge</h1><p class="muted">Local file transfer • No cloud • No account</p>
+<section class="card"><h2>Send to Android</h2><p class="muted">Choose multiple files from your iPhone.</p>
+<label class="pick" for="files">＋ Select files</label><input id="files" type="file" multiple><button id="send">Upload</button>
+<p id="chosen" class="muted">No files selected</p><progress id="bar" max="100" value="0"></progress><p id="status">Ready</p></section>
+<section class="card"><h2>Files on Android</h2><div id="list">Loading…</div></section>
+<script>
+const input=document.querySelector('#files'),status=document.querySelector('#status'),bar=document.querySelector('#bar');let selected=[];
+const fmt=n=>n<1048576?(n/1024).toFixed(1)+' KB':(n/1048576).toFixed(1)+' MB';
+input.onchange=()=>{selected=[...input.files];document.querySelector('#chosen').textContent=selected.length+' file(s) selected'};
+document.querySelector('#send').onclick=async()=>{if(!selected.length){status.textContent='Select files first';return}
+let done=0,total=selected.reduce((a,f)=>a+f.size,0),sent=0;bar.value=0;
+for(const f of selected){status.textContent='Uploading '+f.name+' ('+(done+1)+'/'+selected.length+')';
+try{const r=await fetch('/files/'+encodeURIComponent(f.name),{method:'PUT',body:f});if(!r.ok)throw Error('HTTP '+r.status);done++;sent+=f.size;bar.value=total?sent/total*100:100}
+catch(e){status.textContent+=' • Failed: '+e.message}}
+status.textContent='Uploaded '+done+'/'+selected.length+' files';selected=[];input.value='';document.querySelector('#chosen').textContent='No files selected';refresh()};
+async function refresh(){const box=document.querySelector('#list');try{const fs=await(await fetch('/api/files')).json();box.innerHTML='';
+if(!fs.length){box.textContent='No files yet';return}for(const f of fs){const row=document.createElement('div');row.className='row';const n=document.createElement('span');n.textContent=f.name+' · '+fmt(f.size);const a=document.createElement('a');a.href='/files/'+encodeURIComponent(f.name);a.textContent='Download';row.append(n,a);box.append(row)}}catch(e){box.textContent='Could not load files: '+e.message}}
+refresh();
+</script></body></html>
