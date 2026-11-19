@@ -6,7 +6,7 @@ plugins {
 android {
  namespace = "app.localbridge"
  compileSdk = 35
- defaultConfig { applicationId = "app.localbridge"; minSdk = 26; targetSdk = 35; versionCode = 3; versionName = "0.2.0-alpha" }
+ defaultConfig { applicationId = "app.localbridge"; minSdk = 26; targetSdk = 35; versionCode = 4; versionName = "0.3.0-alpha.1" }
  buildFeatures { compose = true }
  compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
  kotlinOptions { jvmTarget = "17" }

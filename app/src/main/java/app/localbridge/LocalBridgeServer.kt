@@ -2,27 +2,27 @@ package app.localbridge
 
 import android.content.Context
 import android.net.Uri
+import android.os.Environment
 import android.webkit.MimeTypeMap
 import androidx.documentfile.provider.DocumentFile
 import fi.iki.elonen.NanoHTTPD
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.io.FileInputStream
-import java.io.InputStream
 import java.net.URLDecoder
 
 class LocalBridgeServer(
     private val context: Context,
     private val sharedTreeUri: Uri?,
     private val websiteTreeUri: Uri?,
-    sharePathInput: String
+    sharePathInput: String,
+    private val storageIndex: StorageIndex
 ) : NanoHTTPD("0.0.0.0", 8765) {
 
     private val sharePath = normalizePath(sharePathInput)
-    private val sharedRoot = sharedTreeUri?.let { DocumentFile.fromTreeUri(context, it) } ?: run {
-        val defaultFolder = context.getExternalFilesDir("Shared") ?: File(context.filesDir, "Shared")
-        defaultFolder.mkdirs()
-        DocumentFile.fromFile(defaultFolder)
-    }
+    private val sharedRoot = if (sharedTreeUri != null) DocumentFile.fromTreeUri(context, sharedTreeUri)
+        else DocumentFile.fromFile(Environment.getExternalStorageDirectory())
     private val websiteRoot = websiteTreeUri?.let { DocumentFile.fromTreeUri(context, it) }
     private val fallbackHtml = context.assets.open("index.html").bufferedReader().use { it.readText() }
 
@@ -64,15 +64,11 @@ class LocalBridgeServer(
         .map { URLDecoder.decode(it, "UTF-8") }
         .also { segments -> require(segments.all { it != "." && it != ".." && !it.contains('\\') && !it.contains('/') }) }
 
-    private fun resolveDocument(path: String, createParents: Boolean = false): DocumentFile? {
+    private fun resolveDocument(path: String): DocumentFile? {
         var current = sharedRoot?.takeIf { it.exists() && it.isDirectory } ?: return null
         val segments = decodedSegments(path)
         if (segments.isEmpty()) return current
-        segments.forEachIndexed { index, segment ->
-            var next = current.findFile(segment)
-            if (next == null && createParents && index < segments.lastIndex) next = current.createDirectory(segment)
-            current = next ?: return null
-        }
+        segments.forEach { segment -> current = current.findFile(segment) ?: return null }
         return current
     }
 
@@ -80,7 +76,7 @@ class LocalBridgeServer(
         val segments = decodedSegments(relativePath)
         if (segments.isEmpty()) return text(Response.Status.BAD_REQUEST, "Missing filename")
         val name = segments.last()
-        var parent = sharedRoot?.takeIf { it.exists() && it.isDirectory } ?: return text(Response.Status.INTERNAL_ERROR, "Choose a shared folder in LocalBridge")
+        var parent = sharedRoot?.takeIf { it.exists() && it.isDirectory } ?: return text(Response.Status.INTERNAL_ERROR, "Choose a shared folder in LoBBY")
         segments.dropLast(1).forEach { segment ->
             parent = parent.findFile(segment)?.takeIf { it.isDirectory }
                 ?: return text(Response.Status.NOT_FOUND, "Folder does not exist")
@@ -91,17 +87,17 @@ class LocalBridgeServer(
         val tempFile = File(tempPath)
         val old = parent.findFile(name)
         if (old != null && !old.delete()) return text(Response.Status.INTERNAL_ERROR, "Could not replace existing file")
-        val mime = mimeType(name)
-        val destination = parent.createFile(mime, name) ?: return text(Response.Status.INTERNAL_ERROR, "Could not create file")
+        val destination = parent.createFile(mimeType(name), name) ?: return text(Response.Status.INTERNAL_ERROR, "Could not create file")
         context.contentResolver.openOutputStream(destination.uri, "w")?.use { output ->
             FileInputStream(tempFile).use { input -> input.copyTo(output, 1024 * 1024) }
         } ?: return text(Response.Status.INTERNAL_ERROR, "Could not open destination")
+        storageIndex.refresh(segments.joinToString("/"))
         return newFixedLengthResponse(Response.Status.CREATED, "application/json", "{\"ok\":true}")
     }
 
     private fun download(relativePath: String): Response {
         val doc = resolveDocument(relativePath) ?: return text(Response.Status.NOT_FOUND, "Not found")
-        if (doc.isDirectory) return directoryListing(doc)
+        if (doc.isDirectory) return directoryListing(relativePath)
         val input = context.contentResolver.openInputStream(doc.uri) ?: return text(Response.Status.NOT_FOUND, "Not found")
         return newChunkedResponse(Response.Status.OK, doc.type ?: mimeType(doc.name ?: "file"), input)
     }
@@ -116,29 +112,25 @@ class LocalBridgeServer(
 
     private fun delete(relativePath: String): Response {
         val doc = resolveDocument(relativePath) ?: return text(Response.Status.NOT_FOUND, "Not found")
-        return if (doc.delete()) newFixedLengthResponse(Response.Status.NO_CONTENT, "text/plain", "")
+        val deleted = doc.delete()
+        if (deleted) storageIndex.refresh(relativePath)
+        return if (deleted) newFixedLengthResponse(Response.Status.NO_CONTENT, "text/plain", "")
         else text(Response.Status.INTERNAL_ERROR, "Could not delete")
     }
 
     private fun listing(relativePath: String): Response {
-        val root = sharedRoot ?: return newFixedLengthResponse(Response.Status.OK, "application/json", "[]")
-        val directory = if (relativePath.isBlank()) root else resolveDocument(relativePath)
+        val normalized = decodedSegments(relativePath).joinToString("/")
+        val directory = if (normalized.isBlank()) sharedRoot else resolveDocument(normalized)
         if (directory == null || !directory.isDirectory) return text(Response.Status.NOT_FOUND, "Folder not found")
-        return directoryJson(directory)
-    }
-
-    private fun directoryListing(directory: DocumentFile): Response = directoryJson(directory)
-
-    private fun directoryJson(directory: DocumentFile): Response {
-        val array = org.json.JSONArray()
-        directory.listFiles().sortedBy { if (it.isDirectory) 0 else 1 }.forEach { item ->
-            array.put(org.json.JSONObject()
-                .put("name", item.name ?: "")
-                .put("size", item.length())
-                .put("directory", item.isDirectory))
+        val entries = storageIndex.children(normalized)
+        val array = JSONArray()
+        entries.forEach { item ->
+            array.put(JSONObject().put("name", item.name).put("size", item.size).put("directory", item.directory))
         }
         return newFixedLengthResponse(Response.Status.OK, "application/json", array.toString())
     }
+
+    private fun directoryListing(relativePath: String): Response = listing(relativePath)
 
     private fun serveWebsite(rawPath: String): Response {
         val root = websiteRoot?.takeIf { it.exists() && it.isDirectory }

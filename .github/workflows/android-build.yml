@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build-debug-apk:
-    name: Build debug APK
+    name: Build LoBBY 0.3.0-alpha.1
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -33,10 +33,13 @@ jobs:
       - name: Build debug APK
         run: gradle --no-daemon clean :app:assembleDebug
 
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/LoBBY-0.3.0-alpha.1.apk
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LocalBridge-v0.2.0-alpha-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: LoBBY-0.3.0-alpha.1
+          path: app/build/outputs/apk/debug/LoBBY-0.3.0-alpha.1.apk
           if-no-files-found: error
           retention-days: 14
