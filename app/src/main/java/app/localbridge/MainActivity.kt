@@ -158,19 +158,28 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() { server?.stop(); server = null; super.onDestroy() }
 
-    private fun lanIp(): String? = try {
-        val nets = NetworkInterface.getNetworkInterfaces()
-        while (nets.hasMoreElements()) {
-            val network = nets.nextElement()
-            if (!network.isUp || network.isLoopback) continue
-            val addresses = network.inetAddresses
-            while (addresses.hasMoreElements()) {
-                val address = addresses.nextElement()
-                if (address is java.net.Inet4Address && !address.isLoopbackAddress && !address.hostAddress.orEmpty().startsWith("169.254.")) return address.hostAddress
+    private fun lanIp(): String? {
+        return try {
+            val nets = NetworkInterface.getNetworkInterfaces()
+            var found: String? = null
+            while (nets.hasMoreElements() && found == null) {
+                val network = nets.nextElement()
+                if (!network.isUp || network.isLoopback) continue
+                val addresses = network.inetAddresses
+                while (addresses.hasMoreElements() && found == null) {
+                    val address = addresses.nextElement()
+                    if (address is java.net.Inet4Address &&
+                        !address.isLoopbackAddress &&
+                        !address.hostAddress.orEmpty().startsWith("169.254.")) {
+                        found = address.hostAddress
+                    }
+                }
             }
+            found
+        } catch (_: Exception) {
+            null
         }
-        null
-    } catch (_: Exception) { null }
+    }
 }
 
 

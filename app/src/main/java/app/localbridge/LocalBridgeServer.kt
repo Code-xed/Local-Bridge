@@ -39,7 +39,7 @@ class LocalBridgeServer(
         return try {
             val rawPath = session.uri.substringBefore('?')
             when {
-                session.method == Method.OPTIONS -> response(Response.Status.NO_CONTENT, "text/plain", "")
+                session.method == Method.OPTIONS -> newFixedLengthResponse(Response.Status.NO_CONTENT, "text/plain", "")
                 session.method == Method.GET && rawPath == "/api/files" -> listing(session.parameters["path"]?.firstOrNull().orEmpty())
                 session.method == Method.GET && rawPath.startsWith("$sharePath/") -> transfer(rawPath.removePrefix("$sharePath/"), session.headers["range"])
                 session.method == Method.GET && rawPath == sharePath -> listing("")
@@ -332,9 +332,16 @@ class LocalBridgeServer(
         }
         val relative = rawPath.removePrefix("/").ifBlank { "index.html" }
         val segments = decodedSegments(relative)
-        var doc = root
-        for (segment in segments) doc = doc.findFile(segment) ?: return text(Response.Status.NOT_FOUND, "Not found")
-        if (doc.isDirectory) doc = doc.findFile("index.html") ?: return text(Response.Status.NOT_FOUND, "No index.html in this folder")
+        var current: DocumentFile? = root
+        for (segment in segments) {
+            current = current?.findFile(segment)
+                ?: return text(Response.Status.NOT_FOUND, "Not found")
+        }
+        var doc = current ?: return text(Response.Status.NOT_FOUND, "Not found")
+        if (doc.isDirectory) {
+            doc = doc.findFile("index.html")
+                ?: return text(Response.Status.NOT_FOUND, "No index.html in this folder")
+        }
         val length = doc.length()
         val input = context.contentResolver.openInputStream(doc.uri) ?: return text(Response.Status.NOT_FOUND, "Not found")
         return if (length >= 0) newFixedLengthResponse(Response.Status.OK, doc.type ?: mimeType(doc.name ?: "file"), input, length)
