@@ -6,7 +6,7 @@ plugins {
 android {
  namespace = "app.localbridge"
  compileSdk = 35
- defaultConfig { applicationId = "app.localbridge"; minSdk = 26; targetSdk = 35; versionCode = 4; versionName = "0.3.0-alpha.1" }
+ defaultConfig { applicationId = "app.localbridge"; minSdk = 26; targetSdk = 35; versionCode = 4; versionName = "0.4.0-alpha" }
  buildFeatures { compose = true }
  compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
  kotlinOptions { jvmTarget = "17" }
@@ -19,4 +19,5 @@ dependencies {
  implementation("androidx.compose.ui:ui")
  implementation("androidx.compose.material3:material3")
  implementation("org.nanohttpd:nanohttpd:2.3.1")
+ implementation("com.google.zxing:core:3.5.3")
 }

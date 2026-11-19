@@ -1,17 +1,24 @@
 # Changelog
 
-## v0.3.0-alpha.1
-- Added All Files Access support with SAF folder selection retained as an alternative.
-- Added persistent SQLite filesystem indexing and indexed API directory listings.
-- Added direct-filesystem change observers and periodic index reconciliation.
-- Restructured the native Android app screen.
-- Renamed the APK and GitHub Actions artifact to `LoBBY-0.3.0-alpha.1`.
+## 0.4.0-alpha
+- Reworked the Android app home screen with a softer neutral surface, status card and floating bottom navigation pill.
+- Added in-app Privacy Policy, Copyright & Credits, and Support information pages.
+- Replaced the directory listing implementation with a live, non-recursive listing. SAF providers are queried through `DocumentsContract` where supported, with a `DocumentFile` fallback.
+- Added HTTP byte-range responses (206), invalid-range responses (416), `Accept-Ranges`, `Content-Range`, `Content-Length`, `HEAD`, and ETag headers for shared files.
+- File content is streamed with bounded buffers; the server does not load whole files into memory.
+- Preserved the pluggable website folder and existing file API routes.
 
-## v0.2.0-alpha
-- Added shared-folder selection through Android's Storage Access Framework.
-- Added a configurable file share URL path.
-- Added custom static website folder selection.
-- Added nested-folder browsing to the built-in transfer page.
+### Known alpha limitations
+- The server supports independent Range requests, but adaptive multi-connection download orchestration belongs to the client and is not included in the Android server app.
+- Resumable/parallel chunk upload protocol is not implemented in this alpha.
+- SAF random access depends on the selected document provider. Providers exposing pipe-backed streams may require sequential skipping and can be slow for distant seeks.
+- HTTP is unauthenticated and unencrypted. Use only on a trusted LAN.
+- The Support page needs the project's actual Buy Me a Coffee URL before release.
+- Privacy and credits copy should be reviewed against the final distribution, dependencies and data practices before public release.
 
-## v0.1.1-alpha
-- Initial local-network file-sharing release.
+## Storage and connection improvements
+- Restored separate All Files Access and SAF storage modes.
+- Added a native in-app folder browser for All Files Access, with persistent selected-folder preference.
+- Added direct filesystem listing, transfer, upload, and delete paths for All Files Access.
+- Added a tappable LAN address, copy-link action, and QR code connection dialog.
+- Kept the existing SAF and pluggable website flows intact.
