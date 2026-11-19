@@ -1,39 +1,42 @@
-# LoBBY v0.3.0-alpha.1
+# LoBBY 0.4.0-alpha
 
-Local HTTP file sharing between Android and iPhone. The iPhone can open the server URL in Safari; both devices use the same local network and shared storage.
+Local-network file sharing from Android. The Android app hosts the server; a separate, pluggable website/client can connect to it.
 
-## v0.3.0-alpha.1
-- Adds Android All Files Access as the primary shared-storage mode.
-- Keeps the Storage Access Framework folder picker for sharing a specific folder instead.
-- Adds a persistent SQLite filesystem index for fast `/api/files` listings.
-- Performs an initial scan, watches filesystem changes where direct filesystem access is available, and periodically reconciles the index.
-- Restructures the native Android app screen around server status, storage, indexing and settings.
-- APK filename and Actions artifact: `LoBBY-0.3.0-alpha.1.apk`.
+## 0.4.0-alpha highlights
 
-## Storage access
-Grant **All Files Access** to share the shared internal-storage root. This includes accessible shared folders such as `Download`, `Documents` and `DCIM`. Android still restricts access to other apps' private data under locations such as `Android/data` and `Android/obb`.
+- Live, non-recursive directory listing. Opening a folder reads only that folder's immediate children; no startup-wide recursive index is required.
+- SAF directory enumeration uses `DocumentsContract` where supported, with a provider-compatible fallback.
+- HTTP byte-range support for shared files (`206 Partial Content`) so browser audio/video players can seek and clients can request independent byte ranges.
+- `HEAD`, `Accept-Ranges`, `Content-Range`, `Content-Length`, ETag and `416 Range Not Satisfiable` support.
+- Streamed file responses with bounded memory use.
+- Native Android UI refresh: soft neutral background, floating bottom navigation pill, Privacy Policy, Copyright & Credits and Support pages.
+- The website folder remains independently pluggable. This release does not redesign the served website.
 
-Alternatively, use **Choose a specific shared folder** to grant access to a folder through Android's system folder picker. All Files Access and SAF are alternatives; both are not required.
+## Build
 
-## Build with GitHub Actions
-1. Upload the project contents to the root of a GitHub repository.
-2. Push to `main` or `master`, or run the workflow manually from Actions.
-3. Download the `LoBBY-0.3.0-alpha.1` artifact. The APK inside is named `LoBBY-0.3.0-alpha.1.apk`.
+Use Android Studio or the repository's GitHub Actions workflow. The project uses Android Gradle Plugin 8.7.3, Kotlin 2.0.21, compile SDK 35 and Java 17.
 
-## Usage
-1. Install the APK and grant All Files Access, or choose a specific shared folder.
-2. Wait for the initial index scan to begin/populate. The server can start while indexing continues.
-3. Optionally choose a custom website folder and/or change the file share URL path.
-4. Start the server and open the displayed HTTP address from the other device on the same Wi-Fi.
+## Use
 
-A custom website replaces the built-in page at `/`. Keep using `/api/files` and the configured share path for file operations. The custom website folder is independent of the shared storage folder.
+1. Install the debug APK.
+2. Optionally select a shared folder using Android's system folder picker.
+3. Optionally select a custom website folder. It is served independently from the file API.
+4. Start sharing and open the displayed LAN URL from another device.
+5. Shared files are available under the configured share path (default `/files`); directory listing is available at `/api/files`.
 
-## Indexing notes
-The index is stored locally in the app database and survives app restarts. Direct filesystem access uses directory observers for changes, with a periodic reconciliation scan as a fallback. SAF-backed folders are reconciled periodically and updated immediately after operations performed through LoBBY. The app performs a fresh reconciliation when opened.
+## HTTP range behaviour
 
-## Current limitations
-- HTTP only, with no TLS or authentication. Anyone able to reach the server on the local network may access the shared files. Use only on a trusted network.
-- The app must remain open during transfers and indexing.
-- Android restrictions still apply to protected app-private directories.
-- No automatic hotspot pairing, resumable transfers, or background service.
-- The server supports the current HTTP file operations; it is not a complete standards-compliant WebDAV implementation.
+The server accepts a single `Range: bytes=start-end` request and responds with `206 Partial Content`, `Content-Range`, `Content-Length` and `Accept-Ranges: bytes`. Invalid or unsatisfiable ranges receive `416`. A client can make multiple independent range requests for parallel downloading, but this Android app does not itself implement a download-manager client or choose the number of connections.
+
+## Known alpha limitations
+
+- Adaptive single/multi-connection download orchestration is client-side and is not included in the Android server app.
+- Parallel/resumable chunk uploads are not implemented yet; ordinary PUT uploads remain available.
+- SAF random access varies by document provider. Pipe-backed providers may need sequential skipping, making distant seeks slower.
+- The Support page contains a placeholder. Add the project's real Buy Me a Coffee URL before publishing.
+- The server uses unauthenticated, unencrypted HTTP. Use only on a trusted private network and stop sharing when finished.
+- The app must remain open during transfers; this release does not add a foreground service.
+
+## Legal
+
+The in-app privacy and credits pages are starter copy, not legal advice. Review them against the actual release, dependency licenses and any future analytics or external services before distribution.
