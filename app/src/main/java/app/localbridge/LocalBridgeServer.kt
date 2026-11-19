@@ -3,6 +3,7 @@ package app.localbridge
 import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import androidx.documentfile.provider.DocumentFile
 import fi.iki.elonen.NanoHTTPD
@@ -24,14 +25,15 @@ class LocalBridgeServer(
     private val context: Context,
     private val sharedTreeUri: Uri?,
     private val websiteTreeUri: Uri?,
-    sharePathInput: String
+    sharePathInput: String,
+    selectedFileRoot: File? = null
 ) : NanoHTTPD("0.0.0.0", 8765) {
 
     private val sharePath = normalizePath(sharePathInput)
     private val defaultSharedFolder: File = (context.getExternalFilesDir("Shared") ?: File(context.filesDir, "Shared")).apply { mkdirs() }
-    private val sharedFileRoot: File? = if (sharedTreeUri == null) defaultSharedFolder else null
+    private val sharedFileRoot: File? = selectedFileRoot ?: if (sharedTreeUri == null) defaultSharedFolder else null
     private val sharedRoot: DocumentFile? = sharedTreeUri?.let { DocumentFile.fromTreeUri(context, it) }
-        ?: DocumentFile.fromFile(defaultSharedFolder)
+        ?: DocumentFile.fromFile(sharedFileRoot ?: defaultSharedFolder)
     private val websiteRoot = websiteTreeUri?.let { DocumentFile.fromTreeUri(context, it) }
     private val fallbackHtml = context.assets.open("index.html").bufferedReader().use { it.readText() }
 
@@ -205,7 +207,7 @@ class LocalBridgeServer(
         }
         val doc = resolveDocument(relativePath) ?: return text(Response.Status.NOT_FOUND, "Not found")
         if (doc.isDirectory) return listing(relativePath)
-        val length = doc.length()
+        val length = documentLength(doc)
         if (length < 0) {
             if (!rangeHeader.isNullOrBlank()) return rangeNotSatisfiable(-1)
             val stream = context.contentResolver.openInputStream(doc.uri) ?: return text(Response.Status.NOT_FOUND, "Not found")
@@ -239,6 +241,31 @@ class LocalBridgeServer(
             addHeader("ETag", "W/\"${length}-${doc.lastModified()}\"")
             addHeader("Cache-Control", "no-cache")
         }
+    }
+
+    /** Resolve size from the document metadata, OpenableColumns, or a seekable descriptor. */
+    private fun documentLength(doc: DocumentFile): Long {
+        val direct = doc.length()
+        if (direct >= 0) return direct
+        try {
+            context.contentResolver.query(doc.uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val column = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (column >= 0 && !cursor.isNull(column)) {
+                        val size = cursor.getLong(column)
+                        if (size >= 0) return size
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+        try {
+            context.contentResolver.openAssetFileDescriptor(doc.uri, "r")?.use { afd ->
+                if (afd.length >= 0) return afd.length
+                val stat = afd.parcelFileDescriptor.statSize
+                if (stat >= 0) return stat
+            }
+        } catch (_: Exception) { }
+        return -1L
     }
 
     /** Seek using the provider's file descriptor when possible; sequential fallback otherwise. */
@@ -286,7 +313,7 @@ class LocalBridgeServer(
         }
         val doc = resolveDocument(relativePath) ?: return text(Response.Status.NOT_FOUND, "Not found")
         if (doc.isDirectory) return text(Response.Status.OK, "Directory")
-        val length = doc.length()
+        val length = documentLength(doc)
         return newFixedLengthResponse(Response.Status.OK, doc.type ?: mimeType(doc.name ?: "file"), "").apply {
             if (length >= 0) addHeader("Content-Length", length.toString())
             addHeader("Accept-Ranges", if (length >= 0) "bytes" else "none")
@@ -295,6 +322,18 @@ class LocalBridgeServer(
     }
 
     private fun upload(session: IHTTPSession, relativePath: String): Response {
+        if (sharedFileRoot != null) {
+            val destination = resolveFile(relativePath) ?: return text(Response.Status.BAD_REQUEST, "Invalid destination")
+            val parent = destination.parentFile ?: return text(Response.Status.BAD_REQUEST, "Invalid destination")
+            if (!parent.exists() || !parent.isDirectory) return text(Response.Status.NOT_FOUND, "Folder does not exist")
+            val parsed = HashMap<String, String>()
+            session.parseBody(parsed)
+            val tempPath = parsed["content"] ?: return text(Response.Status.BAD_REQUEST, "Missing upload body")
+            return try {
+                FileInputStream(File(tempPath)).use { input -> destination.outputStream().use { output -> input.copyTo(output, 256 * 1024) } }
+                newFixedLengthResponse(Response.Status.CREATED, "application/json", "{\"ok\":true}")
+            } catch (e: Exception) { text(Response.Status.INTERNAL_ERROR, e.message ?: "Upload failed") }
+        }
         val segments = decodedSegments(relativePath)
         if (segments.isEmpty()) return text(Response.Status.BAD_REQUEST, "Missing filename")
         var parent = sharedRoot?.takeIf { it.exists() && it.isDirectory } ?: return text(Response.Status.INTERNAL_ERROR, "Choose a shared folder in LoBBY")

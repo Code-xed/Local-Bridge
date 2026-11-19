@@ -15,3 +15,10 @@
 - HTTP is unauthenticated and unencrypted. Use only on a trusted LAN.
 - The Support page needs the project's actual Buy Me a Coffee URL before release.
 - Privacy and credits copy should be reviewed against the final distribution, dependencies and data practices before public release.
+
+## Storage and connection improvements
+- Restored separate All Files Access and SAF storage modes.
+- Added a native in-app folder browser for All Files Access, with persistent selected-folder preference.
+- Added direct filesystem listing, transfer, upload, and delete paths for All Files Access.
+- Added a tappable LAN address, copy-link action, and QR code connection dialog.
+- Kept the existing SAF and pluggable website flows intact.

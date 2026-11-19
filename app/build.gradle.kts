@@ -19,4 +19,5 @@ dependencies {
  implementation("androidx.compose.ui:ui")
  implementation("androidx.compose.material3:material3")
  implementation("org.nanohttpd:nanohttpd:2.3.1")
+ implementation("com.google.zxing:core:3.5.3")
 }
