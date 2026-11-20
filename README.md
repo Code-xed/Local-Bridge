@@ -1,42 +1,60 @@
-# LoBBY 0.4.0-alpha
+# LoBBY
 
-Local-network file sharing from Android. The Android app hosts the server; a separate, pluggable website/client can connect to it.
+**Local-network file sharing from Android.** Your Android device hosts the
+server; another device on the same trusted network connects through a browser
+or a compatible client.
 
-## 0.4.0-alpha highlights
+LoBBY is an independent open-source project by **Code-xed**.
 
-- Live, non-recursive directory listing. Opening a folder reads only that folder's immediate children; no startup-wide recursive index is required.
-- SAF directory enumeration uses `DocumentsContract` where supported, with a provider-compatible fallback.
-- HTTP byte-range support for shared files (`206 Partial Content`) so browser audio/video players can seek and clients can request independent byte ranges.
-- `HEAD`, `Accept-Ranges`, `Content-Range`, `Content-Length`, ETag and `416 Range Not Satisfiable` support.
-- Streamed file responses with bounded memory use.
-- Native Android UI refresh: soft neutral background, floating bottom navigation pill, Privacy Policy, Copyright & Credits and Support pages.
-- The website folder remains independently pluggable. This release does not redesign the served website.
+## What it does
+
+- Shares a folder selected through Android's Storage Access Framework, or
+  storage locations permitted by Android's All Files Access setting.
+- Serves directory listings and files over a local HTTP server.
+- Supports HTTP byte ranges for media seeking and clients that request
+  independent portions of a file.
+- Provides a QR code and local address to make connecting another device easy.
+- Can serve a separately selected website/client folder.
 
 ## Build
 
-Use Android Studio or the repository's GitHub Actions workflow. The project uses Android Gradle Plugin 8.7.3, Kotlin 2.0.21, compile SDK 35 and Java 17.
+The project uses Android Gradle Plugin 8.7.3, Kotlin 2.0.21, compile SDK 35
+and Java 17. Builds and release publishing are handled through the repository's
+GitHub Actions workflow.
 
 ## Use
 
-1. Install the debug APK.
-2. Optionally select a shared folder using Android's system folder picker.
-3. Optionally select a custom website folder. It is served independently from the file API.
-4. Start sharing and open the displayed LAN URL from another device.
-5. Shared files are available under the configured share path (default `/files`); directory listing is available at `/api/files`.
+1. Install the APK from the project's GitHub Releases.
+2. Select the folder you want to share.
+3. Start the local server.
+4. Connect another device to the same trusted Wi-Fi network or hotspot.
+5. Open the displayed LAN address or scan the QR code.
+6. Stop the server when the transfer is finished.
 
-## HTTP range behaviour
+## Network and security notes
 
-The server accepts a single `Range: bytes=start-end` request and responds with `206 Partial Content`, `Content-Range`, `Content-Length` and `Accept-Ranges: bytes`. Invalid or unsatisfiable ranges receive `416`. A client can make multiple independent range requests for parallel downloading, but this Android app does not itself implement a download-manager client or choose the number of connections.
+The current alpha server uses unencrypted HTTP and does not provide
+authentication. Any device that can reach the server on the local network may
+be able to access the shared folder while sharing is enabled. Use a trusted
+private network, share only folders you intend to expose, and stop the server
+when finished. Keep LoBBY open while transfers are in progress.
 
-## Known alpha limitations
+## Open-source license
 
-- Adaptive single/multi-connection download orchestration is client-side and is not included in the Android server app.
-- Parallel/resumable chunk uploads are not implemented yet; ordinary PUT uploads remain available.
-- SAF random access varies by document provider. Pipe-backed providers may need sequential skipping, making distant seeks slower.
-- The Support page contains a placeholder. Add the project's real Buy Me a Coffee URL before publishing.
-- The server uses unauthenticated, unencrypted HTTP. Use only on a trusted private network and stop sharing when finished.
-- The app must remain open during transfers; this release does not add a foreground service.
+LoBBY's original source code and project documentation are licensed under the
+[Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). Third-party dependencies keep
+their own licenses; see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-## Legal
+## Support the project
 
-The in-app privacy and credits pages are starter copy, not legal advice. Review them against the actual release, dependency licenses and any future analytics or external services before distribution.
+LoBBY is free to use. If you find it useful and want to support continued
+maintenance and development, you can do so voluntarily at
+https://buymeacoffee.com/code.xed. Support is optional and does not unlock
+features or change app functionality.
+
+## Project links
+
+- Source code: https://github.com/Code-xed/Local-Bridge
+- Support: https://buymeacoffee.com/code.xed
+- Apache License 2.0: https://www.apache.org/licenses/LICENSE-2.0

@@ -281,11 +281,34 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun InfoPage(page: String, modifier: Modifier = Modifier) {
-    Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    fun openLink(url: String) {
+        try {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (_: Exception) {
+            // A browser or compatible app may not be available.
+        }
+    }
+
+    Column(
+        modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
         Text("LoBBY", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = LobbyInk)
-        Text(when (page) { "privacy" -> "Privacy policy"; "credits" -> "Copyright & credits"; else -> "Support the project" }, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = LobbyInk)
+        Text(
+            when (page) {
+                "privacy" -> "Privacy policy"
+                "credits" -> "About LoBBY"
+                else -> "Support development"
+            },
+            fontSize = 22.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = LobbyInk
+        )
+
         Surface(color = LobbySurface, shape = RoundedCornerShape(22.dp)) {
-            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 when (page) {
                     "privacy" -> {
                         InfoHeading("Local-first operation")
@@ -298,19 +321,77 @@ private fun InfoPage(page: String, modifier: Modifier = Modifier) {
                         Text("This codebase contains no analytics or advertising integration. Android and included open-source libraries remain subject to their own platform and license terms. This policy must be updated if future versions add telemetry or external services.")
                     }
                     "credits" -> {
-                        Text("© 2026 LoBBY contributors. All rights reserved to their respective authors.")
-                        InfoHeading("Open-source components")
-                        Text("NanoHTTPD · BSD 3-Clause License\nAndroidX and Jetpack Compose · Apache License 2.0\nAndroidX DocumentFile · Apache License 2.0")
-                        InfoHeading("Project")
-                        Text("LoBBY is a local-network file sharing and transfer project. Third-party names and trademarks belong to their respective owners. See THIRD_PARTY_NOTICES.md and dependency license files for details.")
+                        InfoHeading("The project")
+                        Text("LoBBY is a local-network file sharing project built by Code-xed. It lets your Android device host a local server so other devices on the same network can access the folders you choose to share.")
+                        Text("Source code, issue tracking and project updates are available on GitHub.", color = LobbyMuted)
+                        Button(
+                            onClick = { openLink("https://github.com/Code-xed/Local-Bridge") },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Text("View LoBBY on GitHub")
+                        }
+
+                        InfoHeading("Copyright")
+                        Text("Copyright © 2026 Code-xed. LoBBY's original source code and project documentation are distributed under the Apache License, Version 2.0.")
+                        Text("LoBBY is an independent project. Android, AndroidX, Jetpack Compose and all third-party product names are the property of their respective owners.", color = LobbyMuted, fontSize = 13.sp)
+
+                        InfoHeading("Open-source license")
+                        Text("LoBBY is free and open-source software licensed under Apache-2.0. You may use, modify and redistribute the project in accordance with the license terms. The full license is included with the source distribution.")
+                        OutlinedButton(
+                            onClick = { openLink("https://www.apache.org/licenses/LICENSE-2.0") },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Text("Read Apache License 2.0")
+                        }
+
+                        InfoHeading("Open-source acknowledgements")
+                        Text("LoBBY is built with these open-source libraries:")
+                        FossCredit("NanoHTTPD 2.3.1", "BSD 3-Clause", "https://github.com/NanoHttpd/nanohttpd")
+                        FossCredit("AndroidX Core KTX 1.15.0", "Apache-2.0", "https://developer.android.com/jetpack/androidx/releases/core")
+                        FossCredit("AndroidX DocumentFile 1.0.1", "Apache-2.0", "https://developer.android.com/jetpack/androidx/releases/documentfile")
+                        FossCredit("AndroidX Activity Compose 1.10.0", "Apache-2.0", "https://developer.android.com/jetpack/androidx/releases/activity")
+                        FossCredit("Jetpack Compose UI and Material 3", "Apache-2.0", "https://developer.android.com/jetpack/compose")
+                        FossCredit("ZXing Core 3.5.3", "Apache-2.0", "https://github.com/zxing/zxing")
+                        Text("This is the direct-dependency summary. Transitive dependencies may carry additional notices. See THIRD_PARTY_NOTICES.md in the repository for details.", color = LobbyMuted, fontSize = 12.sp)
                     }
                     else -> {
-                        Text("LoBBY is an independent project. If it saves you time, you can support continued development.")
-                        Text("The Buy Me a Coffee destination will be connected before public release.", color = LobbyMuted)
+                        Text("LoBBY is free and open-source software. If it makes moving files around your local network a little easier, you can support its continued development.")
+                        Text("Contributions are completely optional. The app remains free to use, and supporting the project does not unlock features or change how it works.", color = LobbyMuted)
+                        Spacer(Modifier.height(4.dp))
+                        Button(
+                            onClick = { openLink("https://buymeacoffee.com/code.xed") },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Text("☕  Buy Me a Coffee")
+                        }
+                        TextButton(
+                            onClick = { openLink("https://github.com/Code-xed/Local-Bridge") },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Explore the source on GitHub", color = LobbyGreen)
+                        }
+                        Text("Thank you for using LoBBY and helping keep independent open-source software alive.", color = LobbyMuted, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun FossCredit(name: String, license: String, url: String) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Column(Modifier.fillMaxWidth().clickable {
+        try {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (_: Exception) {
+        }
+    }.padding(vertical = 5.dp)) {
+        Text(name, fontWeight = FontWeight.Medium, color = LobbyInk)
+        Text("$license  ·  View project ↗", color = LobbyGreen, fontSize = 12.sp)
     }
 }
 
