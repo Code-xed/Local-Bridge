@@ -495,6 +495,7 @@ class LocalBridgeServer(
         val senderPublicKey = body.getString("senderPublicKey")
         val requestedChunkSize = body.optLong("chunkSize", 8L * 1024L * 1024L)
         val senderEphemeralPublicKey = body.getString("senderEphemeralPublicKey")
+        val senderNameClaim = body.optString("senderName", "LoBBY-${senderId.take(8)}").take(80)
         val signature = body.getString("signature")
         val filesJson = body.getJSONArray("files")
         if (transferId.length !in 16..80 || timestamp < System.currentTimeMillis() - 300_000L || timestamp > System.currentTimeMillis() + 300_000L || filesJson.length() !in 1..64) {
@@ -502,10 +503,9 @@ class LocalBridgeServer(
         }
         if (LobbyIdentity.deviceId(senderPublicKey) != senderId) return errorResponse(Response.Status.FORBIDDEN, "Invalid sender identity")
         val trusted = LobbyIdentity.findTrustedPeer(context, senderId)
-            ?: return errorResponse(Response.Status.FORBIDDEN, "Pair with this device before sending files")
-        if (trusted.publicKey != senderPublicKey) return errorResponse(Response.Status.FORBIDDEN, "Trusted identity mismatch")
+        if (trusted != null && trusted.publicKey != senderPublicKey) return errorResponse(Response.Status.FORBIDDEN, "Trusted identity mismatch")
         if (requestedChunkSize !in (1L * 1024L * 1024L)..(32L * 1024L * 1024L)) return errorResponse(Response.Status.BAD_REQUEST, "Invalid chunk size")
-        val signedPayload = "$transferId|$timestamp|$senderId|$senderPublicKey|${filesJson}|$requestedChunkSize|$senderEphemeralPublicKey".toByteArray(Charsets.UTF_8)
+        val signedPayload = "$transferId|$timestamp|$senderId|$senderPublicKey|${filesJson}|$requestedChunkSize|$senderEphemeralPublicKey|$senderNameClaim".toByteArray(Charsets.UTF_8)
         if (!LobbyIdentity.verify(senderPublicKey, signedPayload, signature)) return errorResponse(Response.Status.FORBIDDEN, "Transfer request signature failed")
         if (!usedTransferIds.add(transferId)) return errorResponse(Response.Status.CONFLICT, "Transfer request was already used")
 
@@ -533,8 +533,12 @@ class LocalBridgeServer(
         }
         val sessionTranscript = "SESSION|$transferId|$senderId|${own.deviceId}|$receiverEphemeralPublicKey"
         val receiverEphemeralSignature = LobbyIdentity.sign(context, sessionTranscript.toByteArray(Charsets.UTF_8))
-        val info = IncomingTransferInfo(transferId, senderId, trusted.name, files, total, "pending", System.currentTimeMillis())
-        val autoAccept = context.getSharedPreferences("lobby_security", Context.MODE_PRIVATE).getBoolean("auto_accept_trusted", false)
+        val senderName = trusted?.name ?: senderNameClaim
+        val info = IncomingTransferInfo(transferId, senderId, senderName, files, total, "pending", System.currentTimeMillis())
+        val securityPrefs = context.getSharedPreferences("lobby_security", Context.MODE_PRIVATE)
+        val autoAcceptAll = securityPrefs.getBoolean("receive_without_confirmation", false)
+        val autoAcceptTrusted = securityPrefs.getBoolean("auto_accept_trusted", false) && trusted != null
+        val autoAccept = autoAcceptAll || autoAcceptTrusted
         val transfer = IncomingTransfer(
             info, senderPublicKey, requestedChunkSize, sessionKey, receiverEphemeralPublicKey,
             receiverEphemeralSignature, emptyList(), if (autoAccept) "accepted" else "pending"
@@ -544,7 +548,7 @@ class LocalBridgeServer(
             try {
                 allocateTransferFiles(transfer)
                 persistIncomingTransfer(transfer)
-                LobbyNotifications.show(context, transferId.hashCode(), "Receiving LoBBY files", "${trusted.name}: ${files.size} file(s) · ${formatBytes(total)}", transferId, openInbox = false)
+                LobbyNotifications.show(context, transferId.hashCode(), "Receiving LoBBY files", "$senderName: ${files.size} file(s) · ${formatBytes(total)}", transferId, openInbox = false)
             } catch (e: Exception) {
                 transfer.state = "failed"
                 appendHistory(transfer, "failed", null)
@@ -555,7 +559,7 @@ class LocalBridgeServer(
             }
         } else {
             persistIncomingTransfer(transfer)
-            LobbyNotifications.show(context, transferId.hashCode(), "Incoming LoBBY transfer", "${trusted.name}: ${files.size} file(s) · ${formatBytes(total)}", transferId, openInbox = false)
+            LobbyNotifications.show(context, transferId.hashCode(), "Incoming LoBBY transfer", "$senderName: ${files.size} file(s) · ${formatBytes(total)}", transferId, openInbox = false)
         }
         onTransferChanged?.invoke()
         return jsonResponse(JSONObject().put("transferId", transferId).put("status", transfer.state))

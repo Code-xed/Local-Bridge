@@ -114,6 +114,7 @@ class MainActivity : ComponentActivity() {
                 var serverRevision by remember { mutableIntStateOf(0) }
                 val securityPrefs = getSharedPreferences("lobby_security", MODE_PRIVATE)
                 var autoAcceptTrusted by remember { mutableStateOf(securityPrefs.getBoolean("auto_accept_trusted", false)) }
+                var receiveWithoutConfirmation by remember { mutableStateOf(securityPrefs.getBoolean("receive_without_confirmation", false)) }
                 var performanceProfile by remember { mutableStateOf(TransferPerformance.loadProfile(this@MainActivity)) }
                 var performanceTuning by remember { mutableStateOf(TransferPerformance.loadTuning(this@MainActivity)) }
                 var benchmarkStatus by remember { mutableStateOf("No benchmark run yet") }
@@ -476,7 +477,7 @@ class MainActivity : ComponentActivity() {
                                     val selectedPeer = selectedDevice
                                     val selectedPeerTrusted = selectedPeer?.deviceId?.let { LobbyIdentity.findTrustedPeer(this@MainActivity, it) != null } == true
                                     if (selectedPeer != null && !selectedPeerTrusted) {
-                                        Button(
+                                        OutlinedButton(
                                             enabled = !pairingInProgress && !sending,
                                             onClick = {
                                                 pairingInProgress = true
@@ -500,33 +501,31 @@ class MainActivity : ComponentActivity() {
                                                 activePairingOperation = pairingOperation
                                             },
                                             modifier = Modifier.fillMaxWidth(),
-                                            shape = RoundedCornerShape(14.dp),
-                                            contentPadding = PaddingValues(vertical = 14.dp)
-                                        ) { Text(if (pairingInProgress) "Pairing…" else "Pair with this device", fontWeight = FontWeight.SemiBold) }
-                                        Text("Pairing is required once. Compare the six-digit code on both devices before accepting.", color = LobbyMuted, fontSize = 11.sp)
-                                    } else {
-                                        Button(
-                                            enabled = !sending && selectedFiles.isNotEmpty() && selectedPeer != null,
-                                            onClick = {
-                                                val target = selectedPeer ?: return@Button
-                                                sending = true
-                                                transferProgress = null
-                                                transferStatus = "Requesting permission from ${target.name.removePrefix("LoBBY-")}…"
-                                                val payloads = selectedFiles.map { TransferPayload(it.uri, it.name, it.mimeType, it.size) }
-                                                transferOperation = NativeTransferClient(this@MainActivity).startTransfer(target, payloads, performanceTuning) { progress ->
-                                                    runOnUiThread {
-                                                        transferProgress = progress
-                                                        transferStatus = progress.status
-                                                        if (progress.finished) sending = false
-                                                    }
-                                                }
-                                                activeTransferOperation = transferOperation
-                                            },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            shape = RoundedCornerShape(14.dp),
-                                            contentPadding = PaddingValues(vertical = 14.dp)
-                                        ) { Text(if (sending) "Sending…" else "Send ${selectedFiles.size} file(s)", fontWeight = FontWeight.SemiBold) }
+                                            shape = RoundedCornerShape(14.dp)
+                                        ) { Text(if (pairingInProgress) "Pairing…" else "Pair this device (optional)") }
+                                        Text("Pairing saves this device as trusted for future automatic acceptance. You can send without pairing.", color = LobbyMuted, fontSize = 11.sp)
                                     }
+                                    Button(
+                                        enabled = !sending && selectedFiles.isNotEmpty() && selectedPeer != null,
+                                        onClick = {
+                                            val target = selectedPeer ?: return@Button
+                                            sending = true
+                                            transferProgress = null
+                                            transferStatus = "Requesting permission from ${target.name.removePrefix("LoBBY-")}…"
+                                            val payloads = selectedFiles.map { TransferPayload(it.uri, it.name, it.mimeType, it.size) }
+                                            transferOperation = NativeTransferClient(this@MainActivity).startTransfer(target, payloads, performanceTuning) { progress ->
+                                                runOnUiThread {
+                                                    transferProgress = progress
+                                                    transferStatus = progress.status
+                                                    if (progress.finished) sending = false
+                                                }
+                                            }
+                                            activeTransferOperation = transferOperation
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(14.dp),
+                                        contentPadding = PaddingValues(vertical = 14.dp)
+                                    ) { Text(if (sending) "Sending…" else "Send ${selectedFiles.size} file(s)", fontWeight = FontWeight.SemiBold) }
                                     transferProgress?.let { progress ->
                                         val fraction = if (progress.finished) 1f else if (progress.totalBytes > 0L) (progress.transferredBytes.toFloat() / progress.totalBytes).coerceIn(0f, 1f) else 0f
                                         LinearProgressIndicator(progress = fraction, modifier = Modifier.fillMaxWidth())
@@ -704,22 +703,42 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        Text("DEVICE TRUST", color = LobbyMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                        Text("RECEIVING & DEVICE TRUST", color = LobbyMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
                         Surface(color = LobbySurface, shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                                     Column(Modifier.weight(1f)) {
+                                        Text("Receive without confirmation", fontWeight = FontWeight.SemiBold)
+                                        Text("Automatically accept transfers from any device on your local network, paired or not.", color = LobbyMuted, fontSize = 11.sp)
+                                    }
+                                    Switch(checked = receiveWithoutConfirmation, onCheckedChange = {
+                                        receiveWithoutConfirmation = it
+                                        securityPrefs.edit().putBoolean("receive_without_confirmation", it).apply()
+                                    })
+                                }
+                                if (receiveWithoutConfirmation) {
+                                    Text("WARNING: Anyone on your local network may send files that will be accepted automatically. Turn this off when you want approval for each transfer.", color = Color(0xFFB45309), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                                }
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Column(Modifier.weight(1f)) {
                                         Text("Automatically accept trusted devices", fontWeight = FontWeight.SemiBold)
-                                        Text("Off by default. Unknown devices must be paired first.", color = LobbyMuted, fontSize = 11.sp)
+                                        Text("Automatically accept paired devices even when asking other senders each time.", color = LobbyMuted, fontSize = 11.sp)
                                     }
                                     Switch(checked = autoAcceptTrusted, onCheckedChange = {
                                         autoAcceptTrusted = it
                                         securityPrefs.edit().putBoolean("auto_accept_trusted", it).apply()
                                     })
                                 }
-                                Text("${if (autoAcceptTrusted) "Trusted devices are auto-accepted" else "Ask every time"}", color = LobbyGreen, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    when {
+                                        receiveWithoutConfirmation -> "All incoming devices are auto-accepted"
+                                        autoAcceptTrusted -> "Trusted devices are auto-accepted; others require approval"
+                                        else -> "Ask every time"
+                                    },
+                                    color = LobbyGreen, fontSize = 12.sp, fontWeight = FontWeight.SemiBold
+                                )
                                 val trustedPeers = LobbyIdentity.trustedPeers(this@MainActivity)
-                                if (trustedPeers.isEmpty()) Text("No paired devices yet. Pair from the Send screen.", color = LobbyMuted, fontSize = 12.sp)
+                                if (trustedPeers.isEmpty()) Text("No paired devices yet. Pairing is optional and can be started from the Send screen.", color = LobbyMuted, fontSize = 12.sp)
                                 trustedPeers.forEach { peer ->
                                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                         Column(Modifier.weight(1f)) {

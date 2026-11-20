@@ -128,8 +128,7 @@ internal class NativeTransferClient(context: Context) {
                     throw IOException("Discovered device identity changed. Pair it again.")
                 }
                 val trusted = LobbyIdentity.findTrustedPeer(context, remoteId)
-                    ?: throw IOException("Pair with this device before sending files")
-                if (trusted.publicKey != remoteKey) throw IOException("Trusted identity mismatch. Pair it again.")
+                if (trusted != null && trusted.publicKey != remoteKey) throw IOException("Trusted identity mismatch. Revoke and pair this device again.")
                 val prepared = files.map { item -> prepareFile(item).also { it.staged?.let(stagedFiles::add) } }
                 val totalBytes = prepared.sumOf { it.size }
                 transferId = UUID.randomUUID().toString().replace("-", "")
@@ -140,18 +139,20 @@ internal class NativeTransferClient(context: Context) {
                 val chunkSize = tuning.chunkSizeMiB * 1024L * 1024L
                 val senderEphemeral = TransferCrypto.createEphemeralKeyPair()
                 val senderEphemeralPublicKey = TransferCrypto.encodePublicKey(senderEphemeral)
-                val canonical = "$transferId|$timestamp|${localIdentity.deviceId}|${localIdentity.publicKey}|$filesJson|$chunkSize|$senderEphemeralPublicKey"
+                val senderName = "LoBBY-${android.os.Build.MODEL}"
+                val canonical = "$transferId|$timestamp|${localIdentity.deviceId}|${localIdentity.publicKey}|$filesJson|$chunkSize|$senderEphemeralPublicKey|$senderName"
                 val request = JSONObject()
                     .put("transferId", transferId)
                     .put("timestamp", timestamp)
                     .put("senderId", localIdentity.deviceId)
                     .put("senderPublicKey", localIdentity.publicKey)
+                    .put("senderName", senderName)
                     .put("senderEphemeralPublicKey", senderEphemeralPublicKey)
                     .put("chunkSize", chunkSize)
                     .put("files", filesJson)
                     .put("signature", LobbyIdentity.sign(context, canonical.toByteArray(Charsets.UTF_8)))
                 val created = requestJson(device.baseUrl + "/api/lobby/v1/transfers/request", "POST", request)
-                val accepted = awaitAcceptance(device, transferId, cancelled, created.optString("status", "pending"), remoteId, localIdentity.deviceId, trusted.publicKey)
+                val accepted = awaitAcceptance(device, transferId, cancelled, created.optString("status", "pending"), remoteId, localIdentity.deviceId, remoteKey)
                 val receiverEphemeralPublicKey = accepted.getString("receiverEphemeralPublicKey")
                 val sessionKey = TransferCrypto.deriveSessionKey(senderEphemeral.private, receiverEphemeralPublicKey, transferId, localIdentity.deviceId, remoteId)
                 transferSessionKey = sessionKey
@@ -501,8 +502,12 @@ internal class NativeTransferClient(context: Context) {
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
             if (code !in 200..299) {
-                val message = try { JSONObject(text).optString("error", "HTTP $code") } catch (_: Exception) { "HTTP $code" }
-                throw IOException(message)
+                val message = try {
+                    JSONObject(text).optString("error").takeIf { it.isNotBlank() } ?: text.takeIf { it.isNotBlank() } ?: "HTTP $code"
+                } catch (_: Exception) {
+                    text.takeIf { it.isNotBlank() } ?: "HTTP $code"
+                }
+                throw IOException("HTTP $code: ${message.take(500)}")
             }
             return if (text.isBlank()) JSONObject() else JSONObject(text)
         } finally {
