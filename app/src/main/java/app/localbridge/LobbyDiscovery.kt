@@ -17,9 +17,10 @@ class LobbyDiscovery(context: Context) {
     data class Device(
         val name: String,
         val host: String,
-        val port: Int
+        val port: Int,
+        val sharePath: String = "/files"
     ) {
-        val baseUrl: String get() = "http://$host:$port"
+        val baseUrl: String get() = "http://${if (host.contains(':')) "[$host]" else host}:$port"
     }
 
     companion object {
@@ -33,12 +34,13 @@ class LobbyDiscovery(context: Context) {
     @Volatile private var onDevicesChanged: ((List<Device>) -> Unit)? = null
 
     @Synchronized
-    fun advertise(port: Int, deviceName: String = "LoBBY Android") {
+    fun advertise(port: Int, deviceName: String = "LoBBY Android", sharePath: String = "/files") {
         stopAdvertising()
         val service = NsdServiceInfo().apply {
             serviceName = deviceName.take(50)
             serviceType = SERVICE_TYPE
             setPort(port)
+            setAttribute("path", sharePath.toByteArray(Charsets.UTF_8))
         }
         val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(info: NsdServiceInfo) = Unit
@@ -75,13 +77,17 @@ class LobbyDiscovery(context: Context) {
                         override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) = Unit
                         override fun onServiceResolved(info: NsdServiceInfo) {
                             val host = if (Build.VERSION.SDK_INT >= 34) {
-                                info.hostAddresses.firstOrNull()?.hostAddress
+                                (info.hostAddresses.firstOrNull { it is java.net.Inet4Address }
+                                    ?: info.hostAddresses.firstOrNull())?.hostAddress
                             } else {
                                 @Suppress("DEPRECATION")
                                 info.host?.hostAddress
                             } ?: return
                             if (info.port !in 1..65535) return
-                            found[info.serviceName] = Device(info.serviceName, host, info.port)
+                            val advertisedPath = info.attributes["path"]?.toString(Charsets.UTF_8)
+                                ?.takeIf { it.matches(Regex("/[A-Za-z0-9_/-]+")) && !it.contains("//") }
+                                ?: "/files"
+                            found[info.serviceName] = Device(info.serviceName, host, info.port, advertisedPath)
                             publish()
                         }
                     })

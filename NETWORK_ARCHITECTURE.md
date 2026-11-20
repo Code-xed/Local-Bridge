@@ -10,17 +10,21 @@ LoBBY is being designed around a platform-independent transfer protocol. Android
 - The Android app can advertise its running service through Android Network Service Discovery (NSD).
 - The Android app can browse for `_lobby._tcp.` services on the current local network.
 - Discovery is local-network only and does not require internet access.
-- A discovered endpoint currently opens the existing browser fallback. Native authenticated app-to-app transfer is not yet implemented.
+- The advertised service record includes the configured HTTP share path.
+- Android accepts single-file and multiple-file shares from the system Sharesheet.
+- The native Send screen previews shared files and uploads them through the existing HTTP `PUT` endpoint.
+- The browser interface remains available as a fallback from the Home device list.
 
-## Intended protocol layers
+## Transfer foundation
 
 1. Discovery: mDNS / Bonjour using `_lobby._tcp.`.
-2. Session handshake: platform-neutral versioned message format.
-3. Authentication: short-lived session credentials and explicit receiver consent.
-4. Transport: direct TCP streaming over the existing LAN or a locally established hotspot network.
-5. Integrity: per-file size and cryptographic digest verification.
+2. Transfer: the existing HTTP API over TCP, including `PUT` uploads and the existing `GET` / `HEAD` download endpoints.
+3. Native clients and the browser interface use the same routes and storage implementation.
+4. The Android Sharesheet integration streams the selected content URI to the receiver's advertised HTTP share path.
 
-The discovery record is only a rendezvous hint. It must not grant permission to upload or download files.
+Do not introduce a second native-only transfer protocol or extra handshake layer when implementing other platform clients. Any future protocol evolution must preserve compatibility with the existing browser API or explicitly version the shared API for every client.
+
+The discovery record is only a rendezvous hint, not an authentication mechanism. The current server accepts requests from devices that can reach it on the local network while sharing is enabled.
 
 ## Network roles
 
@@ -45,4 +49,4 @@ Automatic hotspot creation and QR-based Wi-Fi joining are not implemented in thi
 
 ## Security note
 
-The existing browser server still uses unauthenticated HTTP for compatibility. Do not treat the current browser endpoint or discovery record as the final native transfer security model. Native app-to-app sending must not be enabled until the authenticated session handshake and receiver approval are implemented.
+The existing HTTP server is currently unauthenticated and uses cleartext HTTP on the local network. Native Sharesheet sending uses the same API and therefore has the same trust assumptions as browser uploads. Users should only enable LoBBY sharing on trusted networks and should turn it off when finished. Do not describe the current API as authenticated or encrypted.

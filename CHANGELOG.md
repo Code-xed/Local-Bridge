@@ -1,14 +1,16 @@
 # Changelog
 
-## Unreleased - Cross-platform foundation
+## Unreleased - Share Sheet and shared HTTP transfer
 
 - Reorganized the app into Home, Settings, About and Help destinations.
 - Moved storage and website configuration out of the Home screen.
-- Reframed the Home screen around receiving and nearby devices.
-- Added Android NSD/mDNS advertisement and discovery for `_lobby._tcp.`.
-- Preserved the existing browser transfer path as a compatibility fallback.
-- Added `NETWORK_ARCHITECTURE.md` documenting the platform-independent protocol direction and iOS constraints.
-- Did not add Wi-Fi Direct. Automatic hotspot creation, QR Wi-Fi joining, authenticated native sessions and native app-to-app file sending remain future implementation phases.
+- Renamed receiving controls to **LoBBY sharing**.
+- Added Android Sharesheet support for `ACTION_SEND` and `ACTION_SEND_MULTIPLE`.
+- Added a Send screen with shared-file previews and removal controls.
+- Native Android sending uses the existing HTTP `PUT` upload endpoint used by the browser interface.
+- Added the configured share path to the mDNS service record for native clients.
+- Preserved the existing browser interface and browser fallback.
+- Kept Wi-Fi Direct excluded; hotspot creation and QR-assisted Wi-Fi joining remain future work.
 
 # Changelog
 

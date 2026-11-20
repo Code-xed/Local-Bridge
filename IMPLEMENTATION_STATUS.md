@@ -1,26 +1,22 @@
 # Implementation status
 
-This source package is the first implementation slice of the approved redesign.
+## Implemented in this build
 
-## Included and implemented
+- Four-section Android navigation foundation (Home, Settings, About, Help).
+- LoBBY sharing controls use the clearer enable/disable wording.
+- Android Sharesheet integration for `ACTION_SEND` and `ACTION_SEND_MULTIPLE`.
+- Shared-file preview screen with filename, MIME type, size and remove controls.
+- Native Android sending uses HTTP `PUT` against the receiver's existing configured share path.
+- mDNS advertises the configured HTTP share path so native clients and browser clients target the same API.
+- Existing browser interface and browser fallback remain available.
 
-- Four bottom destinations: Home, Settings, About and Help.
-- Storage and website configuration moved to Settings.
-- Home reframed around receiving and nearby LoBBY devices.
-- Android NSD advertisement while the existing receiver server is running.
-- Android NSD discovery while Home is open.
-- Existing browser QR and HTTP interface retained as a compatibility fallback.
-- Cross-platform architecture notes, including iOS-specific constraints.
+## Still not implemented
 
-## Deliberately not enabled yet
+- Automatic temporary hotspot creation and QR-assisted Wi-Fi joining.
+- iOS, Windows and Linux clients.
+- Background transfer service / persistent notification.
+- Encryption or authentication for the existing HTTP API.
 
-These require additional protocol/security work and device testing; the UI does not pretend they are already functional:
+## Important network note
 
-- Native authenticated app-to-app file sending and receiver approval.
-- Session-token handshake and cryptographic integrity verification.
-- Android temporary local-only hotspot creation and teardown.
-- QR payloads containing Wi-Fi credentials and short-lived LoBBY session data.
-- QR scanner and guided Wi-Fi joining.
-- iOS, Windows and Linux client implementations.
-
-The current browser server remains unauthenticated HTTP for compatibility. Use only on a trusted local network and stop receiving when finished. Native app-to-app transfer must not be enabled until authentication and explicit receiver approval are in place.
+The receiver must turn on LoBBY sharing and both devices must have local network connectivity. The current HTTP API uses cleartext HTTP and has no authentication, matching the existing browser transfer behaviour. Use trusted networks only.

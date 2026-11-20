@@ -1,9 +1,9 @@
 # LoBBY
 
 **Local-first file sharing from Android, with a cross-platform protocol direction.**
-The current Android build keeps the browser transfer path and adds local-network
-LoBBY service discovery. Native authenticated app-to-app transfer is being
-introduced in stages.
+The current Android build keeps the browser transfer path, adds local-network
+LoBBY service discovery, and accepts single or multiple files from Android's
+Share Sheet. Native sending uses the same HTTP upload API as the browser interface.
 
 LoBBY is an independent open-source project by **Code-xed**.
 
@@ -16,6 +16,8 @@ LoBBY is an independent open-source project by **Code-xed**.
   independent portions of a file.
 - Provides a QR code and local address for the browser compatibility path.
 - Advertises and discovers LoBBY peers over the local network using mDNS / NSD.
+- Accepts Android Share Sheet shares for one or multiple files and previews them before sending.
+- Sends to nearby LoBBY devices through the same HTTP `PUT` upload endpoint used by the browser interface.
 - Can serve a separately selected website/client folder.
 
 ## Build
@@ -28,16 +30,17 @@ GitHub Actions workflow.
 
 1. Install the APK from the project's GitHub Releases.
 2. Select the folder you want to share.
-3. Start the local server.
-4. Connect another device to the same trusted Wi-Fi network or manually created hotspot.
-5. Open the displayed LAN address or scan the browser QR code.
-6. Nearby LoBBY services are discovered automatically while the Home screen is open.
-7. Stop receiving when finished.
+3. Turn on LoBBY sharing on the receiving device.
+4. Connect both devices to the same trusted Wi-Fi network or manually created hotspot.
+5. On the sender, select files in a file manager and choose Share → LoBBY.
+6. Review the selected files, choose a nearby LoBBY device and send.
+7. For browser-only clients, open the displayed LAN address or scan the browser QR code.
+8. Turn off LoBBY sharing when finished.
 
 ## Network architecture
 
-See [`NETWORK_ARCHITECTURE.md`](NETWORK_ARCHITECTURE.md) for the cross-platform
-protocol direction, discovery design, planned hotspot workflows and iOS constraints.
+See [`NETWORK_ARCHITECTURE.md`](NETWORK_ARCHITECTURE.md) for the shared HTTP
+transfer foundation, discovery design, planned hotspot workflows and iOS constraints.
 Wi-Fi Direct is intentionally excluded.
 
 ## Network and security notes
