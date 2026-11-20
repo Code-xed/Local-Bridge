@@ -1,9 +1,18 @@
 # Changelog
 
-## Android compatibility hotfix
-- Guarded the Android 11 (API 30) All Files Access API so it is never called on Android 10 and earlier.
-- Automatically uses SAF on Android 10 and earlier, including when an older installation has a saved All Files Access preference.
-- Disabled the All Files Access selector on unsupported Android versions and guarded its Settings intents.
+## Unreleased - Share Sheet and shared HTTP transfer
+
+- Reorganized the app into Home, Settings, About and Help destinations.
+- Moved storage and website configuration out of the Home screen.
+- Renamed receiving controls to **LoBBY sharing**.
+- Added Android Sharesheet support for `ACTION_SEND` and `ACTION_SEND_MULTIPLE`.
+- Added a Send screen with shared-file previews and removal controls.
+- Native Android sending uses the existing HTTP `PUT` upload endpoint used by the browser interface.
+- Added the configured share path to the mDNS service record for native clients.
+- Preserved the existing browser interface and browser fallback.
+- Kept Wi-Fi Direct excluded; hotspot creation and QR-assisted Wi-Fi joining remain future work.
+
+# Changelog
 
 ## 0.4.0-alpha
 - Reworked the Android app home screen with a softer neutral surface, status card and floating bottom navigation pill.
