@@ -434,6 +434,14 @@ class LocalBridgeServer(
     private fun readJsonBody(session: IHTTPSession): JSONObject {
         val parsed = HashMap<String, String>()
         session.parseBody(parsed)
+
+        // NanoHTTPD stores raw POST bodies (including application/json) under
+        // "postData". The "content" entry is used for PUT bodies saved to a
+        // temporary file. Treating every POST as "content" caused valid JSON
+        // transfer and pairing requests to fail with "Missing request body".
+        val postData = parsed["postData"]
+        if (!postData.isNullOrBlank()) return JSONObject(postData)
+
         val bodyPath = parsed["content"] ?: throw IllegalArgumentException("Missing request body")
         val bodyFile = File(bodyPath)
         return try { JSONObject(bodyFile.readText(Charsets.UTF_8)) } finally { bodyFile.delete() }
