@@ -48,11 +48,13 @@ private val LobbyGreen = Color(0xFF326B50)
 
 class MainActivity : ComponentActivity() {
     private var server: LocalBridgeServer? = null
+    private lateinit var discovery: LobbyDiscovery
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val prefs = getSharedPreferences("localbridge", MODE_PRIVATE)
+        discovery = LobbyDiscovery(this)
         setContent {
             val colors = lightColorScheme(
                 primary = LobbyGreen,
@@ -77,6 +79,16 @@ class MainActivity : ComponentActivity() {
                 var folderDialog by remember { mutableStateOf(false) }
                 var browserFolder by remember { mutableStateOf(File(prefs.getString("file_root", "/storage/emulated/0") ?: "/storage/emulated/0")) }
                 var qrDialog by remember { mutableStateOf(false) }
+                var nearbyDevices by remember { mutableStateOf<List<LobbyDiscovery.Device>>(emptyList()) }
+
+                androidx.compose.runtime.DisposableEffect(page) {
+                    if (page == "home") {
+                        discovery.startDiscovery { devices ->
+                            runOnUiThread { nearbyDevices = devices }
+                        }
+                    }
+                    onDispose { discovery.stopDiscovery() }
+                }
 
                 androidx.compose.runtime.DisposableEffect(this@MainActivity) {
                     val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
@@ -104,8 +116,9 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Box(Modifier.fillMaxSize().background(LobbyBg)) {
-                    if (page == "home") {
+                    if (page == "home" || page == "settings") {
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 22.dp, end = 22.dp, top = 28.dp, bottom = 112.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        if (page == "home") {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                             Column {
                                 Text("LoBBY", fontSize = 30.sp, fontWeight = FontWeight.Bold, letterSpacing = (-1).sp, color = LobbyInk)
@@ -118,9 +131,9 @@ class MainActivity : ComponentActivity() {
 
                         Surface(shape = RoundedCornerShape(26.dp), color = LobbySurface, modifier = Modifier.fillMaxWidth().shadow(2.dp, RoundedCornerShape(26.dp))) {
                             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                                Text("LOCAL SERVER", color = LobbyMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
-                                Text(if (running) "Sharing is on" else "Ready to share", fontSize = 23.sp, fontWeight = FontWeight.SemiBold, color = LobbyInk)
-                                Text(if (running) "Keep LoBBY open while another device is transferring files." else "Start the server to make your selected folder available on your LAN.", color = LobbyMuted, fontSize = 14.sp)
+                                Text("RECEIVE ON THIS DEVICE", color = LobbyMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                                Text(if (running) "Ready to receive" else "Receive files on this device", fontSize = 23.sp, fontWeight = FontWeight.SemiBold, color = LobbyInk)
+                                Text(if (running) "This device is visible to LoBBY peers on your local network." else "Start Receive to make this device discoverable and accept browser-based transfers on your LAN.", color = LobbyMuted, fontSize = 14.sp)
                                 if (url != null) {
                                     Surface(color = Color(0xFFF0F4F0), shape = RoundedCornerShape(14.dp)) {
                                         Text(url!!, modifier = Modifier.fillMaxWidth().clickable {
@@ -143,18 +156,46 @@ class MainActivity : ComponentActivity() {
                                         prefs.edit().putString("share_path", sharePath).apply()
                                         val nativeRoot = if (allFilesMode && allFilesGranted) browserFolder else null
                                         server = LocalBridgeServer(this@MainActivity, if (allFilesMode) null else shareUri, siteUri, sharePath, nativeRoot).also { it.start() }
+                                        discovery.advertise(8765, "LoBBY-${android.os.Build.MODEL}")
                                         url = lanIp()?.let { "http://$it:8765" }
                                         running = true
-                                        status = "Server is running. Connect using the address above."
+                                        status = "Receive is active. Nearby LoBBY discovery is enabled."
                                     } catch (e: Exception) { status = "Start failed: ${e.message}" }
-                                    else { server?.stop(); server = null; running = false; url = null; status = "Server stopped" }
+                                    else { server?.stop(); server = null; discovery.stopAdvertising(); running = false; url = null; status = "Server stopped" }
                                 }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(15.dp), contentPadding = PaddingValues(vertical = 14.dp)) {
-                                    Text(if (running) "Stop sharing" else "Start sharing", fontWeight = FontWeight.SemiBold)
+                                    Text(if (running) "Stop receiving" else "Start receiving", fontWeight = FontWeight.SemiBold)
                                 }
                                 Text(status, color = LobbyMuted, fontSize = 12.sp)
                             }
                         }
 
+                        }
+
+                        if (page == "home") {
+                            Surface(color = LobbySurface, shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                        Text("NEARBY DEVICES", color = LobbyMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.1.sp)
+                                        Text("Scanning", color = LobbyGreen, fontSize = 11.sp)
+                                    }
+                                    if (nearbyDevices.isEmpty()) {
+                                        Text("No LoBBY devices found yet. Keep LoBBY open on the other device and start Receive.", color = LobbyMuted, fontSize = 13.sp)
+                                    } else {
+                                        nearbyDevices.forEach { device ->
+                                            Column(Modifier.fillMaxWidth().clickable {
+                                                try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(device.baseUrl))) } catch (_: Exception) { status = "No browser available" }
+                                            }.padding(vertical = 6.dp)) {
+                                                Text(device.name, color = LobbyInk, fontWeight = FontWeight.SemiBold)
+                                                Text("${device.host}:${device.port}  ·  Open browser fallback", color = LobbyMuted, fontSize = 12.sp)
+                                            }
+                                        }
+                                    }
+                                    Text("Discovery is local-network only. Native authenticated app-to-app sending is a later protocol phase; this opens the existing browser fallback.", color = LobbyMuted, fontSize = 11.sp)
+                                }
+                            }
+                        }
+
+                        if (page == "settings") {
                         Text("STORAGE", color = LobbyMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
                         Surface(color = LobbySurface, shape = RoundedCornerShape(22.dp)) {
                             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -188,6 +229,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         Text("Stop sharing before changing storage or server settings.", color = LobbyMuted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp))
+                        }
                     }
                     } else {
                         InfoPage(page, Modifier.fillMaxSize().padding(start = 24.dp, end = 24.dp, top = 34.dp, bottom = 112.dp))
@@ -201,9 +243,9 @@ class MainActivity : ComponentActivity() {
                     ) {
                         Row(Modifier.padding(6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             NavPillItem("Home", page == "home") { page = "home" }
-                            NavPillItem("Privacy", page == "privacy") { page = "privacy" }
-                            NavPillItem("Credits", page == "credits") { page = "credits" }
-                            NavPillItem("Support", page == "support") { page = "support" }
+                            NavPillItem("Settings", page == "settings") { page = "settings" }
+                            NavPillItem("About", page == "about") { page = "about" }
+                            NavPillItem("Help", page == "help") { page = "help" }
                         }
                     }
 
@@ -238,10 +280,10 @@ class MainActivity : ComponentActivity() {
                         Dialog(onDismissRequest = { qrDialog = false }) {
                             Surface(shape = RoundedCornerShape(24.dp), color = LobbySurface) {
                                 Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    Text("Scan to connect", fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                                    Text("Browser connection QR", fontWeight = FontWeight.Bold, fontSize = 20.sp)
                                     Image(bitmap.asImageBitmap(), contentDescription = "QR code for ${url}", modifier = Modifier.size(240.dp))
                                     Text(url!!, color = LobbyGreen, textAlign = TextAlign.Center, fontSize = 13.sp)
-                                    Text("Connect the other device to the same Wi-Fi or hotspot first.", color = LobbyMuted, textAlign = TextAlign.Center, fontSize = 12.sp)
+                                    Text("Connect the other device to the same Wi-Fi or manually created hotspot first. This QR opens the browser fallback, not a Wi-Fi join QR.", color = LobbyMuted, textAlign = TextAlign.Center, fontSize = 12.sp)
                                     TextButton(onClick = { qrDialog = false }) { Text("Close") }
                                 }
                             }
@@ -252,7 +294,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onDestroy() { server?.stop(); server = null; super.onDestroy() }
+    override fun onDestroy() { server?.stop(); server = null; discovery.stop(); super.onDestroy() }
 
     private fun lanIp(): String? {
         return try {
@@ -284,97 +326,51 @@ private fun InfoPage(page: String, modifier: Modifier = Modifier) {
     val context = androidx.compose.ui.platform.LocalContext.current
 
     fun openLink(url: String) {
-        try {
-            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-        } catch (_: Exception) {
-            // A browser or compatible app may not be available.
-        }
+        try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: Exception) { }
     }
 
-    Column(
-        modifier.verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
+    Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("LoBBY", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = LobbyInk)
-        Text(
-            when (page) {
-                "privacy" -> "Privacy policy"
-                "credits" -> "About LoBBY"
-                else -> "Support development"
-            },
-            fontSize = 22.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = LobbyInk
-        )
-
+        Text(if (page == "help") "Help & troubleshooting" else "About LoBBY", fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = LobbyInk)
         Surface(color = LobbySurface, shape = RoundedCornerShape(22.dp)) {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                when (page) {
-                    "privacy" -> {
-                        InfoHeading("Local-first operation")
-                        Text("LoBBY is designed to share files directly between devices on your local network. The app does not require an account or a cloud storage service for LAN transfers.")
-                        InfoHeading("Files and permissions")
-                        Text("LoBBY accesses the folder you select through Android's Storage Access Framework, plus its own app storage when using the default folder. Files are served to devices that can reach your phone and the displayed server port.")
-                        InfoHeading("Network and data")
-                        Text("The current alpha server uses HTTP without encryption or authentication. Anyone on a network who can reach the server may be able to access the shared folder while sharing is enabled. Use trusted private networks and stop sharing when finished.")
-                        InfoHeading("Analytics and third parties")
-                        Text("This codebase contains no analytics or advertising integration. Android and included open-source libraries remain subject to their own platform and license terms. This policy must be updated if future versions add telemetry or external services.")
-                    }
-                    "credits" -> {
-                        InfoHeading("The project")
-                        Text("LoBBY is a local-network file sharing project built by Code-xed. It lets your Android device host a local server so other devices on the same network can access the folders you choose to share.")
-                        Text("Source code, issue tracking and project updates are available on GitHub.", color = LobbyMuted)
-                        Button(
-                            onClick = { openLink("https://github.com/Code-xed/Local-Bridge") },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Text("View LoBBY on GitHub")
-                        }
+                if (page == "help") {
+                    InfoHeading("Connect devices")
+                    Text("For now, connect both devices to the same Wi-Fi network or to the same manually created hotspot. Internet access is not required.")
+                    InfoHeading("Device discovery")
+                    Text("Keep LoBBY open on both devices. On the receiving Android device, start sharing so it can advertise its LoBBY service on the local network.")
+                    InfoHeading("Can't find another device?")
+                    Text("Check that both devices are on the same network, that the router allows communication between clients, and that local-network access is not blocked by a guest network or firewall.")
+                    InfoHeading("Browser compatibility")
+                    Text("If the other device does not have a LoBBY app, use the displayed local address or scan the connection QR code in a browser on the same network.")
+                    InfoHeading("Hotspot setup")
+                    Text("You can create a hotspot manually in Android Settings and connect the other device. Automatic temporary hotspot setup and QR-based Wi-Fi joining are planned connection options, not yet enabled in this build.")
+                } else {
+                    InfoHeading("The project")
+                    Text("LoBBY by Code-xed is a local-first file sharing project. Its direction is a shared, cross-platform transfer protocol with platform-specific networking adapters for Android, iOS and desktop systems.")
+                    Text("Current Android builds provide a local HTTP server, browser compatibility and local-network service discovery. Native authenticated app-to-app transfers are being developed separately.", color = LobbyMuted)
+                    Button(onClick = { openLink("https://github.com/Code-xed/Local-Bridge") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("View LoBBY on GitHub") }
 
-                        InfoHeading("Copyright")
-                        Text("Copyright © 2026 Code-xed. LoBBY's original source code and project documentation are distributed under the Apache License, Version 2.0.")
-                        Text("LoBBY is an independent project. Android, AndroidX, Jetpack Compose and all third-party product names are the property of their respective owners.", color = LobbyMuted, fontSize = 13.sp)
+                    InfoHeading("Privacy and network access")
+                    Text("LoBBY does not require an account or cloud service for local transfers. The current browser server uses HTTP without encryption or authentication. Only run it on a trusted network, share folders you intend to expose, and stop sharing when finished.")
+                    Text("This codebase contains no analytics or advertising integration. Android and included open-source libraries remain subject to their own platform and license terms.", color = LobbyMuted, fontSize = 13.sp)
 
-                        InfoHeading("Open-source license")
-                        Text("LoBBY is free and open-source software licensed under Apache-2.0. You may use, modify and redistribute the project in accordance with the license terms. The full license is included with the source distribution.")
-                        OutlinedButton(
-                            onClick = { openLink("https://www.apache.org/licenses/LICENSE-2.0") },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Text("Read Apache License 2.0")
-                        }
+                    InfoHeading("Copyright and license")
+                    Text("Copyright © 2026 Code-xed. LoBBY's original source code and project documentation are distributed under the Apache License, Version 2.0.")
+                    OutlinedButton(onClick = { openLink("https://www.apache.org/licenses/LICENSE-2.0") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("Read Apache License 2.0") }
 
-                        InfoHeading("Open-source acknowledgements")
-                        Text("LoBBY is built with these open-source libraries:")
-                        FossCredit("NanoHTTPD 2.3.1", "BSD 3-Clause", "https://github.com/NanoHttpd/nanohttpd")
-                        FossCredit("AndroidX Core KTX 1.15.0", "Apache-2.0", "https://developer.android.com/jetpack/androidx/releases/core")
-                        FossCredit("AndroidX DocumentFile 1.0.1", "Apache-2.0", "https://developer.android.com/jetpack/androidx/releases/documentfile")
-                        FossCredit("AndroidX Activity Compose 1.10.0", "Apache-2.0", "https://developer.android.com/jetpack/androidx/releases/activity")
-                        FossCredit("Jetpack Compose UI and Material 3", "Apache-2.0", "https://developer.android.com/jetpack/compose")
-                        FossCredit("ZXing Core 3.5.3", "Apache-2.0", "https://github.com/zxing/zxing")
-                        Text("This is the direct-dependency summary. Transitive dependencies may carry additional notices. See THIRD_PARTY_NOTICES.md in the repository for details.", color = LobbyMuted, fontSize = 12.sp)
-                    }
-                    else -> {
-                        Text("LoBBY is free and open-source software. If it makes moving files around your local network a little easier, you can support its continued development.")
-                        Text("Contributions are completely optional. The app remains free to use, and supporting the project does not unlock features or change how it works.", color = LobbyMuted)
-                        Spacer(Modifier.height(4.dp))
-                        Button(
-                            onClick = { openLink("https://buymeacoffee.com/code.xed") },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Text("☕  Buy Me a Coffee")
-                        }
-                        TextButton(
-                            onClick = { openLink("https://github.com/Code-xed/Local-Bridge") },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Explore the source on GitHub", color = LobbyGreen)
-                        }
-                        Text("Thank you for using LoBBY and helping keep independent open-source software alive.", color = LobbyMuted, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-                    }
+                    InfoHeading("Open-source acknowledgements")
+                    FossCredit("NanoHTTPD 2.3.1", "BSD 3-Clause", "https://github.com/NanoHttpd/nanohttpd")
+                    FossCredit("AndroidX Core KTX 1.15.0", "Apache-2.0", "https://developer.android.com/jetpack/androidx/releases/core")
+                    FossCredit("AndroidX DocumentFile 1.0.1", "Apache-2.0", "https://developer.android.com/jetpack/androidx/releases/documentfile")
+                    FossCredit("AndroidX Activity Compose 1.10.0", "Apache-2.0", "https://developer.android.com/jetpack/androidx/releases/activity")
+                    FossCredit("Jetpack Compose UI and Material 3", "Apache-2.0", "https://developer.android.com/jetpack/compose")
+                    FossCredit("ZXing Core 3.5.3", "Apache-2.0", "https://github.com/zxing/zxing")
+                    Text("See THIRD_PARTY_NOTICES.md for additional dependency notices.", color = LobbyMuted, fontSize = 12.sp)
+
+                    InfoHeading("Support LoBBY")
+                    Text("LoBBY is free to use. If you want to support its continued development, contributions are entirely optional and do not unlock features.")
+                    Button(onClick = { openLink("https://buymeacoffee.com/code.xed") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("☕  Buy Me a Coffee") }
                 }
             }
         }

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased - Cross-platform foundation
+
+- Reorganized the app into Home, Settings, About and Help destinations.
+- Moved storage and website configuration out of the Home screen.
+- Reframed the Home screen around receiving and nearby devices.
+- Added Android NSD/mDNS advertisement and discovery for `_lobby._tcp.`.
+- Preserved the existing browser transfer path as a compatibility fallback.
+- Added `NETWORK_ARCHITECTURE.md` documenting the platform-independent protocol direction and iOS constraints.
+- Did not add Wi-Fi Direct. Automatic hotspot creation, QR Wi-Fi joining, authenticated native sessions and native app-to-app file sending remain future implementation phases.
+
+# Changelog
+
 ## 0.4.0-alpha
 - Reworked the Android app home screen with a softer neutral surface, status card and floating bottom navigation pill.
 - Added in-app Privacy Policy, Copyright & Credits, and Support information pages.
