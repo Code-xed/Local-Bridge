@@ -4,8 +4,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val appVersionCode = providers.gradleProperty("versionCode").orElse("4").get().toInt()
-val appVersionName = providers.gradleProperty("versionName").orElse("0.4.1-alpha").get()
+val appVersionCode = providers.gradleProperty("versionCode").orElse("5").get().toInt()
+val appVersionName = providers.gradleProperty("versionName").orElse("0.5.0-alpha").get()
 
 val releaseKeystorePath = System.getenv("LOBBY_KEYSTORE_PATH")?.let { file(it) }
 val releaseKeystorePassword = System.getenv("KEYSTORE_PASSWORD")

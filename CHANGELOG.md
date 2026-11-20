@@ -1,28 +1,22 @@
 # Changelog
 
-## Unreleased - Native sharing experience
+## 0.5.0-alpha
 
-- Added a unified Home discovery dashboard with native device selection and a dedicated Send screen.
-- Renamed the receiving control to “Turn on LoBBY” / “Turn off LoBBY”.
-- Implemented Android Share Sheet intake for single (`ACTION_SEND`) and multiple (`ACTION_SEND_MULTIPLE`) files, including cold launches and `onNewIntent` delivery.
-- Added shared-file previews, multi-file selection, and native HTTP PUT sending through the existing receiver API.
-- Advertised the configured share path through mDNS so native senders use the receiver's actual HTTP endpoint.
-- Kept the existing browser interface and QR/link fallback intact; no Wi-Fi Direct or separate native transfer protocol was added.
-- Fixed Android 10 and earlier storage compatibility by gating Android 11 All Files Access APIs and using SAF on older versions.
-
-## Earlier foundation work
-
-- Reorganized the app into Home, Settings, About and Help destinations.
-- Moved storage and website configuration out of the Home screen.
-- Reframed the Home screen around receiving and nearby devices.
-- Added Android NSD/mDNS advertisement and discovery for `_lobby._tcp.`.
-- Preserved the existing browser transfer path as a compatibility fallback.
-- Added `NETWORK_ARCHITECTURE.md` documenting the platform-independent protocol direction and iOS constraints.
-- Did not add Wi-Fi Direct. Automatic hotspot creation, QR Wi-Fi joining, background transfers, and authenticated/encrypted sessions remain future implementation phases.
-
-# Changelog
+- Added persistent Android Keystore device identities and signed first-time pairing with six-digit verification-code comparison.
+- Added trusted-device management and optional automatic acceptance for trusted peers; Ask every time remains the default.
+- Added receiver-side accept/decline requests before native uploads.
+- Added ECDH-derived AES-GCM encrypted native chunks, signed transfer metadata, HMAC session authentication and replay protection.
+- Added concurrent multi-file transfers and parallel chunk connections per file behind a global adaptive scheduler.
+- Added Battery Saver, Balanced, Performance, Maximum Throughput and Custom profiles, including adjustable concurrency, chunk and buffer limits.
+- Added signed synthetic network/receiver-cache benchmarks with three samples per configuration and saved per-peer/direction results.
+- Added live sender and receiver progress, per-file progress, throughput and ETA, retries and cancellation.
+- Added receiver-side transfer manifest/chunk restoration and temporary-file finalization with conflict-safe names.
+- Added foreground receiving service, Android notifications, in-app Inbox/history and open/share actions.
+- Preserved the browser compatibility interface and existing direct HTTP upload route; that legacy route remains unauthenticated and unencrypted.
+- Updated the GitHub Actions release version to `0.5.x-alpha`.
 
 ## 0.4.0-alpha
+
 - Reworked the Android app home screen with a softer neutral surface, status card and floating bottom navigation pill.
 - Added in-app Privacy Policy, Copyright & Credits, and Support information pages.
 - Replaced the directory listing implementation with a live, non-recursive listing. SAF providers are queried through `DocumentsContract` where supported, with a `DocumentFile` fallback.
@@ -30,17 +24,18 @@
 - File content is streamed with bounded buffers; the server does not load whole files into memory.
 - Preserved the pluggable website folder and existing file API routes.
 
-### Known alpha limitations
-- The server supports independent Range requests, but adaptive multi-connection download orchestration belongs to the client and is not included in the Android server app.
-- Resumable/parallel chunk upload protocol is not implemented in this alpha.
-- SAF random access depends on the selected document provider. Providers exposing pipe-backed streams may require sequential skipping and can be slow for distant seeks.
-- HTTP is unauthenticated and unencrypted. Use only on a trusted LAN.
-- The Support page needs the project's actual Buy Me a Coffee URL before release.
-- Privacy and credits copy should be reviewed against the final distribution, dependencies and data practices before public release.
+## Earlier foundation work
 
-## Storage and connection improvements
-- Restored separate All Files Access and SAF storage modes.
-- Added a native in-app folder browser for All Files Access, with persistent selected-folder preference.
-- Added direct filesystem listing, transfer, upload, and delete paths for All Files Access.
-- Added a tappable LAN address, copy-link action, and QR code connection dialog.
-- Kept the existing SAF and pluggable website flows intact.
+- Reorganized the app into Home, Settings, About and Help destinations.
+- Added Android NSD/mDNS advertisement and discovery for `_lobby._tcp.`.
+- Added native device selection and Android Share Sheet intake for one or multiple files.
+- Preserved the existing browser transfer path and QR/link fallback.
+- Added `NETWORK_ARCHITECTURE.md` documenting the protocol direction and iOS constraints.
+- Kept Wi-Fi Direct out of the connection strategy.
+
+## Known alpha limitations
+
+- Browser-only devices are not mDNS-discoverable; use the receiver's local URL/QR fallback.
+- The browser compatibility upload API is unauthenticated and unencrypted; use only on trusted networks.
+- Sender-side durable resume after app process death/relaunch is not yet implemented. Native per-chunk retries and receiver-side restoration are available while the current sender operation remains active.
+- Automatic hotspot creation, QR Wi-Fi joining, iOS, Windows and Linux clients are not included.

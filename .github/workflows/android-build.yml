@@ -66,7 +66,7 @@ jobs:
         shell: bash
         run: |
           VERSION_PATCH=$((GITHUB_RUN_NUMBER + 1))
-          VERSION_NAME="0.4.${VERSION_PATCH}-alpha"
+          VERSION_NAME="0.5.${VERSION_PATCH}-alpha"
           VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
 
           echo "version_name=${VERSION_NAME}" >> "$GITHUB_OUTPUT"

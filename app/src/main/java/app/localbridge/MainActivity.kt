@@ -1,6 +1,8 @@
 package app.localbridge
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.os.Build
@@ -60,15 +62,22 @@ private data class SharedItem(
 )
 
 class MainActivity : ComponentActivity() {
-    private var server: LocalBridgeServer? = null
+    private val server: LocalBridgeServer? get() = LobbyServerService.activeServer
     private lateinit var discovery: LobbyDiscovery
     private var incomingShareHandler: ((Intent) -> Unit)? = null
+    private var activeTransferOperation: TransferOperation? = null
+    private var activePairingOperation: TransferOperation? = null
+    private var activeBenchmarkOperation: TransferOperation? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val prefs = getSharedPreferences("localbridge", MODE_PRIVATE)
         discovery = LobbyDiscovery(this)
+        LobbyNotifications.createChannel(this)
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 901)
+        }
         setContent {
             val colors = lightColorScheme(
                 primary = LobbyGreen,
@@ -81,7 +90,7 @@ class MainActivity : ComponentActivity() {
                 outline = Color(0xFFDCE3DD)
             )
             MaterialTheme(colorScheme = colors) {
-                var running by remember { mutableStateOf(false) }
+                var running by remember { mutableStateOf(LobbyServerService.activeServer != null) }
                 var url by remember { mutableStateOf<String?>(null) }
                 var status by remember { mutableStateOf("Ready when you are") }
                 var shareUri by remember { mutableStateOf(prefs.getString("shared_uri", null)?.let(Uri::parse)) }
@@ -91,7 +100,36 @@ class MainActivity : ComponentActivity() {
                 var selectedDevice by remember { mutableStateOf<LobbyDiscovery.Device?>(null) }
                 var transferStatus by remember { mutableStateOf("") }
                 var sending by remember { mutableStateOf(false) }
-                var page by remember { mutableStateOf(if (selectedFiles.isNotEmpty()) "send" else "home") }
+                var transferProgress by remember { mutableStateOf<TransferProgress?>(null) }
+                var transferOperation by remember { mutableStateOf<TransferOperation?>(null) }
+                var pairingOperation by remember { mutableStateOf<TransferOperation?>(null) }
+                var pairingCode by remember { mutableStateOf<String?>(null) }
+                var pairingDeviceName by remember { mutableStateOf("") }
+                var pairingStatus by remember { mutableStateOf("") }
+                var pairingInProgress by remember { mutableStateOf(false) }
+                var incomingTransfers by remember { mutableStateOf<List<IncomingTransferInfo>>(emptyList()) }
+                var pairingRequests by remember { mutableStateOf<List<org.json.JSONObject>>(emptyList()) }
+                var historyEntries by remember { mutableStateOf(TransferHistoryStore.load(this@MainActivity)) }
+                var selectedHistoryTransferId by remember { mutableStateOf(intent.getStringExtra("lobby_transfer_id")) }
+                var serverRevision by remember { mutableIntStateOf(0) }
+                val securityPrefs = getSharedPreferences("lobby_security", MODE_PRIVATE)
+                var autoAcceptTrusted by remember { mutableStateOf(securityPrefs.getBoolean("auto_accept_trusted", false)) }
+                var performanceProfile by remember { mutableStateOf(TransferPerformance.loadProfile(this@MainActivity)) }
+                var performanceTuning by remember { mutableStateOf(TransferPerformance.loadTuning(this@MainActivity)) }
+                var benchmarkStatus by remember { mutableStateOf("No benchmark run yet") }
+                var benchmarkRunning by remember { mutableStateOf(false) }
+                var benchmarkOperation by remember { mutableStateOf<TransferOperation?>(null) }
+                var benchmarkPeer by remember { mutableStateOf<PairBenchmark?>(null) }
+                var benchmarkDevice by remember { mutableStateOf<LobbyDiscovery.Device?>(null) }
+                var renamePeer by remember { mutableStateOf<LobbyIdentity.TrustedPeer?>(null) }
+                var renameDeviceName by remember { mutableStateOf("") }
+                var page by remember {
+                    mutableStateOf(when {
+                        selectedFiles.isNotEmpty() -> "send"
+                        intent.getBooleanExtra("lobby_open_inbox", false) -> "inbox"
+                        else -> "home"
+                    })
+                }
                 // All Files Access exists only on Android 11 (API 30) and newer.
                 // Older versions use the Storage Access Framework (SAF).
                 var allFilesMode by remember {
@@ -112,25 +150,60 @@ class MainActivity : ComponentActivity() {
                             transferStatus = "Files ready to send"
                             page = "send"
                         }
+                        incomingIntent.getStringExtra("lobby_transfer_id")?.let { selectedHistoryTransferId = it }
+                        if (incomingIntent.hasExtra("lobby_open_inbox")) {
+                            if (incomingIntent.getBooleanExtra("lobby_open_inbox", false)) {
+                                historyEntries = TransferHistoryStore.load(this@MainActivity)
+                                page = "inbox"
+                            } else if (incoming.isEmpty()) {
+                                page = "home"
+                            }
+                        }
                     }
                     onDispose { incomingShareHandler = null }
                 }
 
+                androidx.compose.runtime.LaunchedEffect(running, page, serverRevision) {
+                    while (running) {
+                        val activeServer = this@MainActivity.server
+                        incomingTransfers = activeServer?.pendingTransfers().orEmpty()
+                        pairingRequests = activeServer?.pendingPairRequests().orEmpty()
+                        historyEntries = TransferHistoryStore.load(this@MainActivity)
+                        kotlinx.coroutines.delay(250)
+                    }
+                }
+
+                androidx.compose.runtime.LaunchedEffect(selectedHistoryTransferId, historyEntries) {
+                    if (selectedHistoryTransferId != null && historyEntries.any { it.id == selectedHistoryTransferId }) {
+                        page = "inbox"
+                    }
+                }
+
                 androidx.compose.runtime.DisposableEffect(page) {
-                    if (page == "home" || page == "send") {
+                    if (page == "home" || page == "send" || page == "settings") {
                         discovery.startDiscovery { devices ->
-                            runOnUiThread { nearbyDevices = devices }
+                            val ownDeviceId = try { LobbyIdentity.get(this@MainActivity).deviceId } catch (_: Exception) { null }
+                            runOnUiThread { nearbyDevices = devices.filterNot { ownDeviceId != null && it.deviceId == ownDeviceId } }
                         }
                     }
                     onDispose { discovery.stopDiscovery() }
                 }
 
                 androidx.compose.runtime.DisposableEffect(this@MainActivity) {
+                    LobbyServerService.uiListener = { runOnUiThread { serverRevision++ } }
                     val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-                        if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) allFilesGranted = hasAllFilesAccess()
+                        if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                            allFilesGranted = hasAllFilesAccess()
+                            historyEntries = TransferHistoryStore.load(this@MainActivity)
+                            running = this@MainActivity.server != null
+                            if (running) url = lanIp()?.let { "http://$it:8765" }
+                        }
                     }
                     lifecycle.addObserver(observer)
-                    onDispose { lifecycle.removeObserver(observer) }
+                    onDispose {
+                        lifecycle.removeObserver(observer)
+                        LobbyServerService.uiListener = null
+                    }
                 }
 
                 val sharedPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -160,7 +233,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Box(Modifier.fillMaxSize().background(LobbyBg)) {
-                    if (page == "home" || page == "settings" || page == "send") {
+                    if (page == "home" || page == "settings" || page == "send" || page == "inbox") {
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 22.dp, end = 22.dp, top = 28.dp, bottom = 112.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                         if (page == "home") {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
@@ -170,6 +243,77 @@ class MainActivity : ComponentActivity() {
                             }
                             Surface(shape = CircleShape, color = if (running) Color(0xFFE2F1E7) else Color(0xFFE9ECE9)) {
                                 Text(if (running) "  LIVE  " else "  IDLE  ", modifier = Modifier.padding(vertical = 8.dp), color = if (running) LobbyGreen else LobbyMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        if (pairingRequests.isNotEmpty()) {
+                            Surface(color = LobbySurface, shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(17.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Text("PAIRING REQUESTS", color = LobbyMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                                    pairingRequests.forEach { request ->
+                                        Text(request.optString("name", "LoBBY device"), color = LobbyInk, fontWeight = FontWeight.SemiBold)
+                                        Text("Verification code: ${request.optString("code")} · Compare this code with the sender before accepting.", color = LobbyMuted, fontSize = 12.sp)
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Button(onClick = {
+                                                val result = server?.decidePairingLocally(request.optString("nonce"), true) ?: "expired"
+                                                status = if (result == "accepted") "Device paired successfully" else "Pairing failed: $result"
+                                                serverRevision++
+                                            }, modifier = Modifier.weight(1f)) { Text("Accept & trust") }
+                                            OutlinedButton(onClick = {
+                                                server?.decidePairingLocally(request.optString("nonce"), false)
+                                                serverRevision++
+                                            }, modifier = Modifier.weight(1f)) { Text("Decline") }
+                                        }
+                                        if (request != pairingRequests.last()) HorizontalDivider(color = Color(0xFFE7ECE7))
+                                    }
+                                }
+                            }
+                        }
+
+                        if (incomingTransfers.isNotEmpty()) {
+                            Surface(color = LobbySurface, shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(17.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Text("INCOMING TRANSFERS", color = LobbyMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                                    incomingTransfers.forEach { request ->
+                                        Text(request.senderName, color = LobbyInk, fontWeight = FontWeight.SemiBold)
+                                        Text(request.files.joinToString(" · ") { it.name }, color = LobbyInk, fontSize = 13.sp, maxLines = 3)
+                                        Text("${request.files.size} file(s) · ${formatFileSize(request.totalBytes)}", color = LobbyMuted, fontSize = 12.sp)
+                                        if (request.status == "pending") {
+                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                Button(onClick = {
+                                                    val result = server?.decideTransferLocally(request.id, true) ?: "expired"
+                                                    status = if (result == "accepted") "Transfer accepted" else "Could not accept: $result"
+                                                    serverRevision++
+                                                }, modifier = Modifier.weight(1f)) { Text("Accept") }
+                                                OutlinedButton(onClick = {
+                                                    server?.decideTransferLocally(request.id, false)
+                                                    status = "Transfer declined"
+                                                    serverRevision++
+                                                }, modifier = Modifier.weight(1f)) { Text("Decline") }
+                                            }
+                                        } else {
+                                            val receivedFraction = if (request.totalBytes > 0L) (request.receivedBytes.toFloat() / request.totalBytes).coerceIn(0f, 1f) else 0f
+                                            Text("${request.status.replaceFirstChar { it.uppercase() }} · ${formatFileSize(request.receivedBytes)} / ${formatFileSize(request.totalBytes)}", color = LobbyGreen, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                            LinearProgressIndicator(progress = receivedFraction, modifier = Modifier.fillMaxWidth())
+                                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                Text(formatSpeed(request.speedBytesPerSecond), color = LobbyGreen, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                                Text(request.etaSeconds?.let { "${formatDuration(it)} left" } ?: "Calculating ETA…", color = LobbyMuted, fontSize = 11.sp)
+                                            }
+                                            request.files.forEachIndexed { fileIndex, file ->
+                                                val fileReceived = request.fileReceivedBytes.getOrNull(fileIndex) ?: 0L
+                                                val fileFraction = if (file.size > 0L) (fileReceived.toFloat() / file.size).coerceIn(0f, 1f) else if (request.status == "receiving") 0f else 1f
+                                                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                        Text(file.name, color = LobbyMuted, fontSize = 11.sp, maxLines = 1, modifier = Modifier.weight(1f))
+                                                        Text("${(fileFraction * 100).toInt()}% · ${formatFileSize(fileReceived)} / ${formatFileSize(file.size)}", color = LobbyMuted, fontSize = 10.sp)
+                                                    }
+                                                    LinearProgressIndicator(progress = fileFraction, modifier = Modifier.fillMaxWidth())
+                                                }
+                                            }
+                                        }
+                                        if (request != incomingTransfers.last()) HorizontalDivider(color = Color(0xFFE7ECE7))
+                                    }
+                                }
                             }
                         }
 
@@ -199,13 +343,24 @@ class MainActivity : ComponentActivity() {
                                         if (allFilesMode && (!browserFolder.exists() || !browserFolder.isDirectory)) throw IllegalStateException("Selected folder is unavailable")
                                         prefs.edit().putString("share_path", sharePath).apply()
                                         val nativeRoot = if (allFilesMode && allFilesGranted) browserFolder else null
-                                        server = LocalBridgeServer(this@MainActivity, if (allFilesMode) null else shareUri, siteUri, sharePath, nativeRoot).also { it.start() }
-                                        discovery.advertise(8765, "LoBBY-${android.os.Build.MODEL}", sharePath)
+                                        prefs.edit().putString("share_path", sharePath)
+                                            .putString("shared_uri", shareUri?.toString())
+                                            .putString("website_uri", siteUri?.toString())
+                                            .putBoolean("all_files_mode", allFilesMode)
+                                            .putString("file_root", browserFolder.absolutePath)
+                                            .apply()
+                                        val serviceIntent = Intent(this@MainActivity, LobbyServerService::class.java)
+                                        androidx.core.content.ContextCompat.startForegroundService(this@MainActivity, serviceIntent)
                                         url = lanIp()?.let { "http://$it:8765" }
                                         running = true
-                                        status = "Receive is active. Nearby LoBBY discovery is enabled."
+                                        status = "Starting LoBBY receiving service…"
                                     } catch (e: Exception) { status = "Start failed: ${e.message}" }
-                                    else { server?.stop(); server = null; discovery.stopAdvertising(); running = false; url = null; status = "Server stopped" }
+                                    else {
+                                        stopService(Intent(this@MainActivity, LobbyServerService::class.java))
+                                        running = false
+                                        url = null
+                                        status = "Server stopped"
+                                    }
                                 }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(15.dp), contentPadding = PaddingValues(vertical = 14.dp)) {
                                     Text(if (running) "Turn off LoBBY" else "Turn on LoBBY", fontWeight = FontWeight.SemiBold)
                                 }
@@ -246,6 +401,15 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                     Text("Tap a device to choose files and send them. Devices shown here have LoBBY sharing turned on.", color = LobbyMuted, fontSize = 11.sp)
+                                }
+                            }
+                            Surface(color = LobbySurface, shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth().clickable { page = "inbox" }) {
+                                Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text("RECEIVED & HISTORY", color = LobbyMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                                        Text("${historyEntries.count { it.status == "completed" }} received file(s) · ${historyEntries.size} history item(s)", color = LobbyInk, fontWeight = FontWeight.SemiBold)
+                                    }
+                                    Text("View →", color = LobbyGreen, fontWeight = FontWeight.SemiBold)
                                 }
                             }
                         }
@@ -302,32 +466,92 @@ class MainActivity : ComponentActivity() {
                                                     Column(Modifier.weight(1f)) {
                                                         Text(device.name.removePrefix("LoBBY-"), color = LobbyInk, fontWeight = FontWeight.SemiBold)
                                                         Text("${device.host}:${device.port}", color = LobbyMuted, fontSize = 11.sp)
+                                                        Text(if (device.deviceId?.let { LobbyIdentity.findTrustedPeer(this@MainActivity, it) != null } == true) "Paired · Trusted" else "Not paired yet", color = if (device.deviceId?.let { LobbyIdentity.findTrustedPeer(this@MainActivity, it) != null } == true) LobbyGreen else LobbyMuted, fontSize = 10.sp)
                                                     }
                                                     Text(if (isSelected) "Selected ✓" else "Select", color = LobbyGreen, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
                                                 }
                                             }
                                         }
                                     }
-                                    Button(
-                                        enabled = !sending && selectedFiles.isNotEmpty() && selectedDevice != null,
-                                        onClick = {
-                                            val target = selectedDevice ?: return@Button
-                                            sending = true
-                                            transferStatus = "Connecting to ${target.name.removePrefix("LoBBY-")}…"
-                                            sendFilesToDevice(target, selectedFiles) { message, complete ->
-                                                runOnUiThread {
-                                                    transferStatus = message
-                                                    sending = !complete
+                                    val selectedPeer = selectedDevice
+                                    val selectedPeerTrusted = selectedPeer?.deviceId?.let { LobbyIdentity.findTrustedPeer(this@MainActivity, it) != null } == true
+                                    if (selectedPeer != null && !selectedPeerTrusted) {
+                                        Button(
+                                            enabled = !pairingInProgress && !sending,
+                                            onClick = {
+                                                pairingInProgress = true
+                                                pairingCode = null
+                                                pairingStatus = "Waiting for the receiving device to display and approve the same verification code…"
+                                                pairingOperation = NativeTransferClient(this@MainActivity).beginPairing(
+                                                    selectedPeer,
+                                                    onCode = { code, name, remoteId -> runOnUiThread {
+                                                        pairingCode = code
+                                                        pairingDeviceName = name
+                                                        selectedDevice = selectedPeer.copy(deviceId = remoteId)
+                                                        nearbyDevices = nearbyDevices.map { if (it.baseUrl == selectedPeer.baseUrl) it.copy(deviceId = remoteId) else it }
+                                                    } },
+                                                    onFinished = { success, message -> runOnUiThread {
+                                                        pairingInProgress = false
+                                                        pairingStatus = message
+                                                        if (!success) pairingCode = null
+                                                        transferStatus = message
+                                                    } }
+                                                )
+                                                activePairingOperation = pairingOperation
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            shape = RoundedCornerShape(14.dp),
+                                            contentPadding = PaddingValues(vertical = 14.dp)
+                                        ) { Text(if (pairingInProgress) "Pairing…" else "Pair with this device", fontWeight = FontWeight.SemiBold) }
+                                        Text("Pairing is required once. Compare the six-digit code on both devices before accepting.", color = LobbyMuted, fontSize = 11.sp)
+                                    } else {
+                                        Button(
+                                            enabled = !sending && selectedFiles.isNotEmpty() && selectedPeer != null,
+                                            onClick = {
+                                                val target = selectedPeer ?: return@Button
+                                                sending = true
+                                                transferProgress = null
+                                                transferStatus = "Requesting permission from ${target.name.removePrefix("LoBBY-")}…"
+                                                val payloads = selectedFiles.map { TransferPayload(it.uri, it.name, it.mimeType, it.size) }
+                                                transferOperation = NativeTransferClient(this@MainActivity).startTransfer(target, payloads, performanceTuning) { progress ->
+                                                    runOnUiThread {
+                                                        transferProgress = progress
+                                                        transferStatus = progress.status
+                                                        if (progress.finished) sending = false
+                                                    }
                                                 }
-                                            }
-                                        },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(14.dp),
-                                        contentPadding = PaddingValues(vertical = 14.dp)
-                                    ) {
-                                        Text(if (sending) "Sending…" else "Send ${selectedFiles.size} file(s)", fontWeight = FontWeight.SemiBold)
+                                                activeTransferOperation = transferOperation
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            shape = RoundedCornerShape(14.dp),
+                                            contentPadding = PaddingValues(vertical = 14.dp)
+                                        ) { Text(if (sending) "Sending…" else "Send ${selectedFiles.size} file(s)", fontWeight = FontWeight.SemiBold) }
                                     }
-                                    if (sending) LinearProgressIndicator(Modifier.fillMaxWidth())
+                                    transferProgress?.let { progress ->
+                                        val fraction = if (progress.finished) 1f else if (progress.totalBytes > 0L) (progress.transferredBytes.toFloat() / progress.totalBytes).coerceIn(0f, 1f) else 0f
+                                        LinearProgressIndicator(progress = fraction, modifier = Modifier.fillMaxWidth())
+                                        Text("${(fraction * 100).toInt()}% · ${formatFileSize(progress.transferredBytes)} / ${formatFileSize(progress.totalBytes)}", color = LobbyInk, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                        if (progress.currentFile.isNotBlank() && !progress.finished) {
+                                            Text("Current file: ${progress.currentFile}", color = LobbyMuted, fontSize = 11.sp, maxLines = 1)
+                                        }
+                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text(formatSpeed(progress.speedBytesPerSecond), color = LobbyGreen, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                            Text(progress.etaSeconds?.let { "${formatDuration(it)} left" } ?: "Calculating ETA…", color = LobbyMuted, fontSize = 12.sp)
+                                        }
+                                        progress.fileBytes.forEachIndexed { index, transferred ->
+                                            val item = selectedFiles.getOrNull(index) ?: return@forEachIndexed
+                                            val fileTotal = progress.fileTotalBytes.getOrNull(index) ?: item.size
+                                            val itemFraction = if (fileTotal > 0L) (transferred.toFloat() / fileTotal).coerceIn(0f, 1f) else 1f
+                                            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                    Text(item.name, color = LobbyMuted, fontSize = 11.sp, maxLines = 1, modifier = Modifier.weight(1f))
+                                                    Text("${(itemFraction * 100).toInt()}% · ${formatFileSize(transferred)} / ${formatFileSize(fileTotal)}", color = LobbyMuted, fontSize = 11.sp)
+                                                }
+                                                LinearProgressIndicator(progress = itemFraction, modifier = Modifier.fillMaxWidth())
+                                            }
+                                        }
+                                    }
+                                    if (sending) OutlinedButton(onClick = { transferOperation?.cancel(); transferStatus = "Cancelling transfer…" }, modifier = Modifier.fillMaxWidth()) { Text("Cancel transfer") }
                                     if (transferStatus.isNotBlank()) Text(transferStatus, color = LobbyMuted, fontSize = 12.sp)
                                     selectedDevice?.let { target ->
                                         OutlinedButton(
@@ -340,12 +564,180 @@ class MainActivity : ComponentActivity() {
                                             shape = RoundedCornerShape(13.dp)
                                         ) { Text("Open this device in browser instead") }
                                     }
-                                    Text("Both devices must be on the same local network. Files are sent through LoBBY's existing HTTP transfer API.", color = LobbyMuted, fontSize = 11.sp)
+                                    Text("Both devices must be on the same local network. Native transfers use signed device identity, receiver approval and parallel HTTP chunk uploads. Browser sharing remains available separately.", color = LobbyMuted, fontSize = 11.sp)
                                 }
                             }
                         }
 
                         if (page == "settings") {
+                        Text("TRANSFER PERFORMANCE", color = LobbyMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                        Surface(color = LobbySurface, shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Text("Performance profile", fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
+                                Text("No artificial bandwidth cap. The engineering target is a 60 MB/s median on capable modern devices; older devices use the fastest stable configuration their Wi-Fi, CPU and storage can sustain. This is a target, not a guarantee.", color = LobbyMuted, fontSize = 12.sp)
+                                TransferProfile.values().forEach { preset ->
+                                    FilterChip(
+                                        selected = performanceProfile == preset,
+                                        onClick = {
+                                            performanceProfile = preset
+                                            performanceTuning = if (preset == TransferProfile.CUSTOM) performanceTuning else TransferTuning.preset(preset)
+                                            TransferPerformance.save(this@MainActivity, performanceProfile, performanceTuning)
+                                        },
+                                        label = { Text(preset.title) },
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+                                if (performanceProfile == TransferProfile.CUSTOM) {
+                                    Text("Custom limits", color = LobbyGreen, fontWeight = FontWeight.SemiBold)
+                                    Text("Maximum simultaneous files: ${performanceTuning.maxParallelFiles}", fontSize = 12.sp)
+                                    Slider(value = performanceTuning.maxParallelFiles.toFloat(), onValueChange = { value ->
+                                        performanceTuning = performanceTuning.copy(maxParallelFiles = value.toInt()).normalized()
+                                        TransferPerformance.save(this@MainActivity, TransferProfile.CUSTOM, performanceTuning)
+                                    }, valueRange = 1f..8f, steps = 6)
+                                    Text("Connections per file: ${performanceTuning.connectionsPerFile}", fontSize = 12.sp)
+                                    Slider(value = performanceTuning.connectionsPerFile.toFloat(), onValueChange = { value ->
+                                        performanceTuning = performanceTuning.copy(connectionsPerFile = value.toInt()).normalized()
+                                        TransferPerformance.save(this@MainActivity, TransferProfile.CUSTOM, performanceTuning)
+                                    }, valueRange = 1f..8f, steps = 6)
+                                    Text("Maximum total connections: ${performanceTuning.maxConnections}", fontSize = 12.sp)
+                                    Slider(value = performanceTuning.maxConnections.toFloat(), onValueChange = { value ->
+                                        performanceTuning = performanceTuning.copy(maxConnections = value.toInt()).normalized()
+                                        TransferPerformance.save(this@MainActivity, TransferProfile.CUSTOM, performanceTuning)
+                                    }, valueRange = 1f..24f, steps = 22)
+                                    Text("Chunk size: ${performanceTuning.chunkSizeMiB} MiB", fontSize = 12.sp)
+                                    Slider(value = performanceTuning.chunkSizeMiB.toFloat(), onValueChange = { value ->
+                                        performanceTuning = performanceTuning.copy(chunkSizeMiB = value.toInt()).normalized()
+                                        TransferPerformance.save(this@MainActivity, TransferProfile.CUSTOM, performanceTuning)
+                                    }, valueRange = 1f..32f, steps = 30)
+                                    Text("Per-worker buffer: ${performanceTuning.bufferKiB} KiB", fontSize = 12.sp)
+                                    Slider(value = performanceTuning.bufferKiB.toFloat(), onValueChange = { value ->
+                                        performanceTuning = performanceTuning.copy(bufferKiB = value.toInt()).normalized()
+                                        TransferPerformance.save(this@MainActivity, TransferProfile.CUSTOM, performanceTuning)
+                                    }, valueRange = 64f..1024f, steps = 14)
+                                }
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text("Adaptive optimization", fontWeight = FontWeight.Medium)
+                                        Text("Adjust worker usage within the selected limits.", color = LobbyMuted, fontSize = 11.sp)
+                                    }
+                                    Switch(checked = performanceTuning.adaptive, onCheckedChange = {
+                                        performanceTuning = performanceTuning.copy(adaptive = it)
+                                        if (performanceProfile != TransferProfile.CUSTOM) performanceProfile = TransferProfile.CUSTOM
+                                        TransferPerformance.save(this@MainActivity, performanceProfile, performanceTuning)
+                                    })
+                                }
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text("Use saved pair benchmark profiles", fontWeight = FontWeight.Medium)
+                                        Text("Apply the best saved configuration for this sender-receiver pair.", color = LobbyMuted, fontSize = 11.sp)
+                                    }
+                                    Switch(checked = performanceTuning.automaticBenchmark, onCheckedChange = {
+                                        performanceTuning = performanceTuning.copy(automaticBenchmark = it)
+                                        if (performanceProfile != TransferProfile.CUSTOM) performanceProfile = TransferProfile.CUSTOM
+                                        TransferPerformance.save(this@MainActivity, performanceProfile, performanceTuning)
+                                    })
+                                }
+                                HorizontalDivider(color = Color(0xFFE7ECE7))
+                                Text("Benchmark a nearby receiver", fontWeight = FontWeight.SemiBold)
+                                Text("The probe runs signed parallel HTTP uploads with generated test data and writes temporary samples into the receiver's app cache. It measures network plus receiver temporary-storage throughput, not sender source-disk speed, encryption overhead, final SAF copy speed or a guaranteed sustained rate. It uses a bounded test matrix to limit temporary storage use.", color = LobbyMuted, fontSize = 11.sp)
+                                if (benchmarkDevice == null && nearbyDevices.isNotEmpty()) benchmarkDevice = nearbyDevices.first()
+                                if (nearbyDevices.isEmpty()) {
+                                    Text("Turn on LoBBY on another device and keep this page open to discover it.", color = LobbyMuted, fontSize = 12.sp)
+                                } else {
+                                    nearbyDevices.forEach { peer ->
+                                        FilterChip(
+                                            selected = benchmarkDevice?.baseUrl == peer.baseUrl,
+                                            onClick = { benchmarkDevice = peer },
+                                            label = { Text(peer.name.removePrefix("LoBBY-")) },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                }
+                                val benchmarkPeerTrusted = benchmarkDevice?.deviceId?.let {
+                                    LobbyIdentity.findTrustedPeer(this@MainActivity, it) != null
+                                } == true
+                                if (benchmarkDevice != null && !benchmarkPeerTrusted) {
+                                    Text("Pair with this device from the Send screen before benchmarking.", color = LobbyMuted, fontSize = 11.sp)
+                                }
+                                Button(
+                                    enabled = !benchmarkRunning && benchmarkDevice != null && benchmarkPeerTrusted,
+                                    onClick = {
+                                        val peer = benchmarkDevice ?: return@Button
+                                        benchmarkRunning = true
+                                        benchmarkPeer = null
+                                        benchmarkStatus = "Preparing network and receiver-storage tests…"
+                                        benchmarkOperation = NativeTransferClient(this@MainActivity).runBenchmark(
+                                            peer,
+                                            tuningInput = performanceTuning,
+                                            onProgress = { message -> runOnUiThread { benchmarkStatus = message } },
+                                            onFinished = { result, message -> runOnUiThread {
+                                                benchmarkRunning = false
+                                                benchmarkPeer = result
+                                                benchmarkStatus = message
+                                                if (result != null) {
+                                                    val tuned = performanceTuning.copy(
+                                                        maxParallelFiles = result.optimalParallelFiles,
+                                                        connectionsPerFile = (result.optimalConnections / result.optimalParallelFiles).coerceAtLeast(1),
+                                                        maxConnections = result.optimalConnections,
+                                                        chunkSizeMiB = result.chunkSizeMiB
+                                                    ).normalized()
+                                                    if (performanceProfile == TransferProfile.MAXIMUM_THROUGHPUT) {
+                                                        performanceTuning = tuned
+                                                        TransferPerformance.save(this@MainActivity, performanceProfile, performanceTuning)
+                                                    }
+                                                }
+                                            } }
+                                        )
+                                        activeBenchmarkOperation = benchmarkOperation
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(13.dp)
+                                ) { Text(if (benchmarkRunning) "Benchmarking…" else "Run network + storage benchmark") }
+                                if (benchmarkRunning) LinearProgressIndicator(Modifier.fillMaxWidth())
+                                Text(benchmarkStatus, color = LobbyMuted, fontSize = 12.sp)
+                                benchmarkPeer?.let { result ->
+                                    Text("Best measured median: %.1f MB/s · %d connection(s) · %d parallel file(s)".format(result.bestMedianMBps, result.optimalConnections, result.optimalParallelFiles), color = LobbyGreen, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                }
+                                TransferPerformance.loadBenchmarks(this@MainActivity).takeLast(5).asReversed().forEach { result ->
+                                    Text("${result.peerId.take(12)} · ${result.direction} · %.1f MB/s · %d workers".format(result.bestMedianMBps, result.optimalConnections), color = LobbyMuted, fontSize = 11.sp)
+                                }
+                            }
+                        }
+
+                        Text("DEVICE TRUST", color = LobbyMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                        Surface(color = LobbySurface, shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text("Automatically accept trusted devices", fontWeight = FontWeight.SemiBold)
+                                        Text("Off by default. Unknown devices must be paired first.", color = LobbyMuted, fontSize = 11.sp)
+                                    }
+                                    Switch(checked = autoAcceptTrusted, onCheckedChange = {
+                                        autoAcceptTrusted = it
+                                        securityPrefs.edit().putBoolean("auto_accept_trusted", it).apply()
+                                    })
+                                }
+                                Text("${if (autoAcceptTrusted) "Trusted devices are auto-accepted" else "Ask every time"}", color = LobbyGreen, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                val trustedPeers = LobbyIdentity.trustedPeers(this@MainActivity)
+                                if (trustedPeers.isEmpty()) Text("No paired devices yet. Pair from the Send screen.", color = LobbyMuted, fontSize = 12.sp)
+                                trustedPeers.forEach { peer ->
+                                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text(peer.name, color = LobbyInk, fontWeight = FontWeight.Medium)
+                                            Text(peer.deviceId, color = LobbyMuted, fontSize = 10.sp)
+                                        }
+                                        TextButton(onClick = { renamePeer = peer; renameDeviceName = peer.name }) { Text("Rename") }
+                                        TextButton(onClick = { LobbyIdentity.removeTrustedPeer(this@MainActivity, peer.deviceId); serverRevision++ }) { Text("Revoke") }
+                                    }
+                                }
+                                if (trustedPeers.size > 1) {
+                                    TextButton(onClick = { LobbyIdentity.removeAllTrustedPeers(this@MainActivity); serverRevision++ }) {
+                                        Text("Revoke all trusted devices")
+                                    }
+                                }
+                            }
+                        }
+
                         Text("STORAGE", color = LobbyMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
                         Surface(color = LobbySurface, shape = RoundedCornerShape(22.dp)) {
                             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -396,6 +788,37 @@ class MainActivity : ComponentActivity() {
                         }
                         Text("Stop sharing before changing storage or server settings.", color = LobbyMuted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp))
                         }
+
+                        if (page == "inbox") {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(onClick = { page = "home" }) { Text("← Home") }
+                                Spacer(Modifier.weight(1f))
+                                Text("RECEIVED", color = LobbyMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                            }
+                            Text("Received & transfer history", fontSize = 25.sp, fontWeight = FontWeight.Bold, color = LobbyInk)
+                            Text("Completed files are saved in your configured shared folder.", color = LobbyMuted, fontSize = 12.sp)
+                            if (historyEntries.isEmpty()) {
+                                Surface(color = LobbySurface, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+                                    Text("No transfers yet. Accepted and completed transfers will appear here.", modifier = Modifier.padding(18.dp), color = LobbyMuted, fontSize = 13.sp)
+                                }
+                            } else {
+                                historyEntries.forEach { entry ->
+                                    Surface(color = LobbySurface, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().clickable { selectedHistoryTransferId = entry.id }) {
+                                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                                            Text(entry.name, color = LobbyInk, fontWeight = FontWeight.SemiBold, maxLines = 2)
+                                            Text("${entry.sender} · ${formatFileSize(entry.size)}", color = LobbyMuted, fontSize = 12.sp)
+                                            Text("${entry.status.uppercase()} · ${java.text.SimpleDateFormat("dd MMM yyyy, HH:mm", java.util.Locale.getDefault()).format(java.util.Date(entry.timestamp))}", color = if (entry.status == "completed") LobbyGreen else LobbyMuted, fontSize = 11.sp)
+                                            if (entry.status == "completed" && entry.uri.isNotBlank()) {
+                                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                    OutlinedButton(onClick = { openHistoryEntry(entry, false) }, modifier = Modifier.weight(1f)) { Text("Open") }
+                                                    OutlinedButton(onClick = { openHistoryEntry(entry, true) }, modifier = Modifier.weight(1f)) { Text("Share") }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                     } else {
                         InfoPage(page, Modifier.fillMaxSize().padding(start = 24.dp, end = 24.dp, top = 34.dp, bottom = 112.dp))
@@ -409,6 +832,7 @@ class MainActivity : ComponentActivity() {
                     ) {
                         Row(Modifier.padding(6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             NavPillItem("Home", page == "home") { page = "home" }
+                            NavPillItem("Inbox ${historyEntries.count { it.status == "completed" }}", page == "inbox") { historyEntries = TransferHistoryStore.load(this@MainActivity); page = "inbox" }
                             NavPillItem("Settings", page == "settings") { page = "settings" }
                             NavPillItem("About", page == "about") { page = "about" }
                             NavPillItem("Help", page == "help") { page = "help" }
@@ -439,6 +863,75 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                             confirmButton = { TextButton(onClick = { folderDialog = false }) { Text("Done") } }
+                        )
+                    }
+                    if (pairingCode != null) {
+                        AlertDialog(
+                            onDismissRequest = { pairingOperation?.cancel(); pairingCode = null },
+                            title = { Text("Verify device pairing") },
+                            text = {
+                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Text("${pairingDeviceName} is requesting a trusted pairing.")
+                                    Text(pairingCode!!, color = LobbyGreen, fontSize = 32.sp, fontWeight = FontWeight.Bold, letterSpacing = 5.sp)
+                                    Text("The receiving device must show exactly the same six-digit code. Accept on that device only after comparing the codes.", color = LobbyMuted, fontSize = 12.sp)
+                                    Text(pairingStatus, color = LobbyMuted, fontSize = 12.sp)
+                                }
+                            },
+                            confirmButton = { TextButton(onClick = { pairingCode = null }) { Text("Close") } },
+                            dismissButton = { TextButton(onClick = { pairingOperation?.cancel(); pairingCode = null; pairingStatus = "Pairing cancelled" }) { Text("Cancel pairing") } }
+                        )
+                    }
+                    selectedHistoryTransferId?.let { transferId ->
+                        val transferEntries = historyEntries.filter { it.id == transferId }
+                        if (transferEntries.isNotEmpty()) {
+                            AlertDialog(
+                                onDismissRequest = { selectedHistoryTransferId = null },
+                                title = { Text("Transfer details") },
+                                text = {
+                                    Column(
+                                        Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Text("${transferEntries.first().sender} · ${formatFileSize(transferEntries.sumOf { it.size.coerceAtLeast(0L) })} · ${transferEntries.size} file(s)", color = LobbyMuted, fontSize = 12.sp)
+                                        transferEntries.forEach { entry ->
+                                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                Text(entry.name, color = LobbyInk, fontWeight = FontWeight.SemiBold)
+                                                Text("${entry.status.uppercase()} · ${formatFileSize(entry.size)}", color = LobbyMuted, fontSize = 11.sp)
+                                                if (entry.status == "completed" && entry.uri.isNotBlank()) {
+                                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                        OutlinedButton(onClick = { openHistoryEntry(entry, false) }, modifier = Modifier.weight(1f)) { Text("Open") }
+                                                        OutlinedButton(onClick = { openHistoryEntry(entry, true) }, modifier = Modifier.weight(1f)) { Text("Share") }
+                                                    }
+                                                }
+                                            }
+                                            HorizontalDivider(color = Color(0xFFE7ECE7))
+                                        }
+                                    }
+                                },
+                                confirmButton = { TextButton(onClick = { selectedHistoryTransferId = null }) { Text("Close") } }
+                            )
+                        }
+                    }
+                    renamePeer?.let { peer ->
+                        AlertDialog(
+                            onDismissRequest = { renamePeer = null },
+                            title = { Text("Rename trusted device") },
+                            text = {
+                                OutlinedTextField(
+                                    value = renameDeviceName,
+                                    onValueChange = { renameDeviceName = it.take(48) },
+                                    singleLine = true,
+                                    label = { Text("Device name") }
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    LobbyIdentity.renameTrustedPeer(this@MainActivity, peer.deviceId, renameDeviceName)
+                                    renamePeer = null
+                                    serverRevision++
+                                }) { Text("Save") }
+                            },
+                            dismissButton = { TextButton(onClick = { renamePeer = null }) { Text("Cancel") } }
                         )
                     }
                     if (qrDialog && url != null) {
@@ -503,73 +996,45 @@ class MainActivity : ComponentActivity() {
         return SharedItem(uri, name, contentResolver.getType(uri) ?: "application/octet-stream", size)
     }
 
-    private fun sendFilesToDevice(
-        device: LobbyDiscovery.Device,
-        files: List<SharedItem>,
-        onProgress: (String, Boolean) -> Unit
-    ) {
-        Thread {
-            try {
-                files.forEachIndexed { index, item ->
-                    onProgress("Sending ${index + 1} of ${files.size}: ${item.name}", false)
-                    var stagedFile: File? = null
-                    try {
-                        val uploadSize = if (item.size >= 0) item.size else {
-                            stagedFile = File.createTempFile("lobby-share-", ".tmp", cacheDir)
-                            contentResolver.openInputStream(item.uri)?.use { input ->
-                                stagedFile!!.outputStream().use { output -> input.copyTo(output, 256 * 1024) }
-                            } ?: throw IOException("Cannot open ${item.name}")
-                            stagedFile!!.length()
-                        }
-                        val encodedName = URLEncoder.encode(item.name, "UTF-8").replace("+", "%20")
-                        val endpoint = "${device.baseUrl}${device.sharePath.trimEnd('/')}/$encodedName"
-                        val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
-                            requestMethod = "PUT"
-                            doOutput = true
-                            connectTimeout = 15_000
-                            readTimeout = 60_000
-                            setRequestProperty("Content-Type", item.mimeType)
-                            setRequestProperty("Connection", "close")
-                            setFixedLengthStreamingMode(uploadSize)
-                        }
-                        try {
-                            val input = stagedFile?.inputStream() ?: contentResolver.openInputStream(item.uri)
-                                ?: throw IOException("Cannot open ${item.name}")
-                            input.use { source ->
-                                connection.outputStream.use { output ->
-                                    val buffer = ByteArray(256 * 1024)
-                                    while (true) {
-                                        val count = source.read(buffer)
-                                        if (count < 0) break
-                                        output.write(buffer, 0, count)
-                                    }
-                                }
-                            }
-                            val response = connection.responseCode
-                            if (response !in 200..299) {
-                                val detail = try { connection.errorStream?.bufferedReader()?.use { it.readText() } } catch (_: Exception) { null }
-                                throw IOException("${item.name}: HTTP $response${detail?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""}")
-                            }
-                        } finally {
-                            connection.disconnect()
-                        }
-                    } finally {
-                        stagedFile?.delete()
-                    }
-                }
-                onProgress("Transfer complete · ${files.size} file(s) sent", true)
-            } catch (error: Exception) {
-                onProgress("Transfer failed: ${error.message ?: "Connection error"}", true)
-            }
-        }.start()
-    }
-
     /** Returns false below Android 11 without invoking an API unavailable on those versions. */
     private fun hasAllFilesAccess(): Boolean {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()
     }
 
-    override fun onDestroy() { incomingShareHandler = null; server?.stop(); server = null; discovery.stop(); super.onDestroy() }
+    private fun openHistoryEntry(entry: TransferHistoryEntry, share: Boolean) {
+        try {
+            val storedUri = Uri.parse(entry.uri)
+            val contentUri = if (storedUri.scheme == "file") {
+                androidx.core.content.FileProvider.getUriForFile(
+                    this,
+                    "$packageName.fileprovider",
+                    File(storedUri.path ?: throw IOException("File path is unavailable"))
+                )
+            } else storedUri
+            val action = if (share) Intent.ACTION_SEND else Intent.ACTION_VIEW
+            val intent = Intent(action).apply {
+                if (share) {
+                    type = entry.mimeType.ifBlank { "application/octet-stream" }
+                    putExtra(Intent.EXTRA_STREAM, contentUri)
+                } else {
+                    setDataAndType(contentUri, entry.mimeType.ifBlank { "application/octet-stream" })
+                }
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(if (share) Intent.createChooser(intent, "Share ${entry.name}") else intent)
+        } catch (error: Exception) {
+            android.widget.Toast.makeText(this, "Could not open file: ${error.message}", android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+
+    override fun onDestroy() {
+        incomingShareHandler = null
+        activeTransferOperation?.cancel()
+        activePairingOperation?.cancel()
+        activeBenchmarkOperation?.cancel()
+        discovery.stop()
+        super.onDestroy()
+    }
 
     private fun lanIp(): String? {
         return try {
@@ -595,6 +1060,24 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+
+private fun formatSpeed(bytesPerSecond: Double): String {
+    if (bytesPerSecond <= 0.0) return "Starting…"
+    val mb = bytesPerSecond / 1_000_000.0
+    return if (mb >= 1.0) "%.1f MB/s".format(mb) else "%.0f KB/s".format(bytesPerSecond / 1024.0)
+}
+
+private fun formatDuration(seconds: Long): String {
+    val safe = seconds.coerceAtLeast(0L)
+    val hours = safe / 3600
+    val minutes = (safe % 3600) / 60
+    val remaining = safe % 60
+    return when {
+        hours > 0 -> "${hours}h ${minutes}m"
+        minutes > 0 -> "${minutes}m ${remaining}s"
+        else -> "${remaining}s"
+    }
+}
 
 private fun formatFileSize(size: Long): String {
     if (size < 0) return "Size unavailable"
@@ -633,7 +1116,7 @@ private fun InfoPage(page: String, modifier: Modifier = Modifier) {
                 } else {
                     InfoHeading("The project")
                     Text("LoBBY by Code-xed is a local-first file sharing project. Its direction is a shared, cross-platform transfer protocol with platform-specific networking adapters for Android, iOS and desktop systems.")
-                    Text("Android builds provide a local HTTP server, native file selection and Share Sheet intake, mDNS discovery, and native sending through the same HTTP API used by the browser interface.", color = LobbyMuted)
+                    Text("Android builds provide local HTTP and mDNS discovery, secure paired native transfers with receiver approval, parallel chunk scheduling and a browser compatibility interface. The browser upload routes remain a separate legacy path without native pairing or encryption.", color = LobbyMuted)
                     Button(onClick = { openLink("https://github.com/Code-xed/Local-Bridge") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("View LoBBY on GitHub") }
 
                     InfoHeading("Privacy and network access")

@@ -18,7 +18,8 @@ class LobbyDiscovery(context: Context) {
         val name: String,
         val host: String,
         val port: Int,
-        val sharePath: String = "/files"
+        val sharePath: String = "/files",
+        val deviceId: String? = null
     ) {
         val baseUrl: String get() = "http://${if (host.contains(':')) "[$host]" else host}:$port"
     }
@@ -34,13 +35,14 @@ class LobbyDiscovery(context: Context) {
     @Volatile private var onDevicesChanged: ((List<Device>) -> Unit)? = null
 
     @Synchronized
-    fun advertise(port: Int, deviceName: String = "LoBBY Android", sharePath: String = "/files") {
+    fun advertise(port: Int, deviceName: String = "LoBBY Android", sharePath: String = "/files", deviceId: String? = null) {
         stopAdvertising()
         val service = NsdServiceInfo().apply {
     serviceName = deviceName.take(50)
     serviceType = SERVICE_TYPE
     setPort(port)
-    setAttribute("path", sharePath)
+            setAttribute("path", sharePath)
+            deviceId?.let { setAttribute("id", it.take(64)) }
         }
         val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(info: NsdServiceInfo) = Unit
@@ -87,7 +89,8 @@ class LobbyDiscovery(context: Context) {
                             val advertisedPath = info.attributes["path"]?.toString(Charsets.UTF_8)
                                 ?.takeIf { it.matches(Regex("/[A-Za-z0-9_/-]+")) && !it.contains("//") }
                                 ?: "/files"
-                            found[info.serviceName] = Device(info.serviceName, host, info.port, advertisedPath)
+                            val advertisedId = info.attributes["id"]?.toString(Charsets.UTF_8)?.takeIf { it.matches(Regex("[a-fA-F0-9]{16,64}")) }
+                            found[info.serviceName] = Device(info.serviceName, host, info.port, advertisedPath, advertisedId)
                             publish()
                         }
                     })
