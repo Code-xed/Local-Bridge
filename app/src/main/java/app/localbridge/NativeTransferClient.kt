@@ -438,7 +438,7 @@ internal class NativeTransferClient(context: Context) {
                     }
                     if (file.staged != null) {
                         FileInputStream(file.staged).use { input ->
-                            skipFully(input, chunk.offset)
+                            input.channel.position(chunk.offset)
                             TransferCrypto.encryptRange(
                                 input, output, chunk.length, sessionKey, transferId,
                                 chunk.fileIndex, chunk.chunkIndex, chunk.offset,
