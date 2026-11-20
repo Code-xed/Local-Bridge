@@ -1,8 +1,16 @@
 # Changelog
 
-## Unreleased - Cross-platform foundation
+## Unreleased - Native sharing experience
 
+- Added a unified Home discovery dashboard with native device selection and a dedicated Send screen.
+- Renamed the receiving control to “Turn on LoBBY” / “Turn off LoBBY”.
+- Implemented Android Share Sheet intake for single (`ACTION_SEND`) and multiple (`ACTION_SEND_MULTIPLE`) files, including cold launches and `onNewIntent` delivery.
+- Added shared-file previews, multi-file selection, and native HTTP PUT sending through the existing receiver API.
+- Advertised the configured share path through mDNS so native senders use the receiver's actual HTTP endpoint.
+- Kept the existing browser interface and QR/link fallback intact; no Wi-Fi Direct or separate native transfer protocol was added.
 - Fixed Android 10 and earlier storage compatibility by gating Android 11 All Files Access APIs and using SAF on older versions.
+
+## Earlier foundation work
 
 - Reorganized the app into Home, Settings, About and Help destinations.
 - Moved storage and website configuration out of the Home screen.
@@ -10,7 +18,7 @@
 - Added Android NSD/mDNS advertisement and discovery for `_lobby._tcp.`.
 - Preserved the existing browser transfer path as a compatibility fallback.
 - Added `NETWORK_ARCHITECTURE.md` documenting the platform-independent protocol direction and iOS constraints.
-- Did not add Wi-Fi Direct. Automatic hotspot creation, QR Wi-Fi joining, authenticated native sessions and native app-to-app file sending remain future implementation phases.
+- Did not add Wi-Fi Direct. Automatic hotspot creation, QR Wi-Fi joining, background transfers, and authenticated/encrypted sessions remain future implementation phases.
 
 # Changelog
 

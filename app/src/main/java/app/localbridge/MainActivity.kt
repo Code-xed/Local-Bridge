@@ -9,6 +9,7 @@ import android.graphics.Bitmap
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -40,6 +41,10 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import java.io.File
 import java.net.NetworkInterface
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import java.io.IOException
 
 private val LobbyBg = Color(0xFFF4F5F3)
 private val LobbySurface = Color(0xFFFCFDFC)
@@ -47,9 +52,17 @@ private val LobbyInk = Color(0xFF202923)
 private val LobbyMuted = Color(0xFF68736C)
 private val LobbyGreen = Color(0xFF326B50)
 
+private data class SharedItem(
+    val uri: Uri,
+    val name: String,
+    val mimeType: String,
+    val size: Long
+)
+
 class MainActivity : ComponentActivity() {
     private var server: LocalBridgeServer? = null
     private lateinit var discovery: LobbyDiscovery
+    private var incomingShareHandler: ((Intent) -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -74,7 +87,11 @@ class MainActivity : ComponentActivity() {
                 var shareUri by remember { mutableStateOf(prefs.getString("shared_uri", null)?.let(Uri::parse)) }
                 var siteUri by remember { mutableStateOf(prefs.getString("website_uri", null)?.let(Uri::parse)) }
                 var sharePath by remember { mutableStateOf(prefs.getString("share_path", "/files") ?: "/files") }
-                var page by remember { mutableStateOf("home") }
+                var selectedFiles by remember { mutableStateOf(readSharedItems(intent)) }
+                var selectedDevice by remember { mutableStateOf<LobbyDiscovery.Device?>(null) }
+                var transferStatus by remember { mutableStateOf("") }
+                var sending by remember { mutableStateOf(false) }
+                var page by remember { mutableStateOf(if (selectedFiles.isNotEmpty()) "send" else "home") }
                 // All Files Access exists only on Android 11 (API 30) and newer.
                 // Older versions use the Storage Access Framework (SAF).
                 var allFilesMode by remember {
@@ -86,8 +103,21 @@ class MainActivity : ComponentActivity() {
                 var qrDialog by remember { mutableStateOf(false) }
                 var nearbyDevices by remember { mutableStateOf<List<LobbyDiscovery.Device>>(emptyList()) }
 
+                androidx.compose.runtime.DisposableEffect(Unit) {
+                    incomingShareHandler = { incomingIntent ->
+                        val incoming = readSharedItems(incomingIntent)
+                        if (incoming.isNotEmpty()) {
+                            selectedFiles = incoming
+                            selectedDevice = null
+                            transferStatus = "Files ready to send"
+                            page = "send"
+                        }
+                    }
+                    onDispose { incomingShareHandler = null }
+                }
+
                 androidx.compose.runtime.DisposableEffect(page) {
-                    if (page == "home") {
+                    if (page == "home" || page == "send") {
                         discovery.startDiscovery { devices ->
                             runOnUiThread { nearbyDevices = devices }
                         }
@@ -111,6 +141,15 @@ class MainActivity : ComponentActivity() {
                         status = "Shared folder updated"
                     }
                 }
+                val sendFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+                    if (uris.isNotEmpty()) {
+                        uris.forEach { uri ->
+                            try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) { }
+                        }
+                        selectedFiles = (selectedFiles + uris.map { describeSharedItem(it) }).distinctBy { it.uri.toString() }
+                        transferStatus = "${selectedFiles.size} file(s) ready"
+                    }
+                }
                 val websitePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
                     if (uri != null) {
                         try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) { }
@@ -121,7 +160,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Box(Modifier.fillMaxSize().background(LobbyBg)) {
-                    if (page == "home" || page == "settings") {
+                    if (page == "home" || page == "settings" || page == "send") {
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 22.dp, end = 22.dp, top = 28.dp, bottom = 112.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                         if (page == "home") {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
@@ -137,8 +176,8 @@ class MainActivity : ComponentActivity() {
                         Surface(shape = RoundedCornerShape(26.dp), color = LobbySurface, modifier = Modifier.fillMaxWidth().shadow(2.dp, RoundedCornerShape(26.dp))) {
                             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                                 Text("RECEIVE ON THIS DEVICE", color = LobbyMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
-                                Text(if (running) "Ready to receive" else "Receive files on this device", fontSize = 23.sp, fontWeight = FontWeight.SemiBold, color = LobbyInk)
-                                Text(if (running) "This device is visible to LoBBY peers on your local network." else "Start Receive to make this device discoverable and accept browser-based transfers on your LAN.", color = LobbyMuted, fontSize = 14.sp)
+                                Text(if (running) "LoBBY is on" else "Turn on LoBBY to receive files", fontSize = 23.sp, fontWeight = FontWeight.SemiBold, color = LobbyInk)
+                                Text(if (running) "This device is discoverable and ready to receive files from nearby LoBBY devices and browsers." else "Make this device discoverable on your local network so nearby devices can send files here.", color = LobbyMuted, fontSize = 14.sp)
                                 if (url != null) {
                                     Surface(color = Color(0xFFF0F4F0), shape = RoundedCornerShape(14.dp)) {
                                         Text(url!!, modifier = Modifier.fillMaxWidth().clickable {
@@ -161,14 +200,14 @@ class MainActivity : ComponentActivity() {
                                         prefs.edit().putString("share_path", sharePath).apply()
                                         val nativeRoot = if (allFilesMode && allFilesGranted) browserFolder else null
                                         server = LocalBridgeServer(this@MainActivity, if (allFilesMode) null else shareUri, siteUri, sharePath, nativeRoot).also { it.start() }
-                                        discovery.advertise(8765, "LoBBY-${android.os.Build.MODEL}")
+                                        discovery.advertise(8765, "LoBBY-${android.os.Build.MODEL}", sharePath)
                                         url = lanIp()?.let { "http://$it:8765" }
                                         running = true
                                         status = "Receive is active. Nearby LoBBY discovery is enabled."
                                     } catch (e: Exception) { status = "Start failed: ${e.message}" }
                                     else { server?.stop(); server = null; discovery.stopAdvertising(); running = false; url = null; status = "Server stopped" }
                                 }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(15.dp), contentPadding = PaddingValues(vertical = 14.dp)) {
-                                    Text(if (running) "Stop receiving" else "Start receiving", fontWeight = FontWeight.SemiBold)
+                                    Text(if (running) "Turn off LoBBY" else "Turn on LoBBY", fontWeight = FontWeight.SemiBold)
                                 }
                                 Text(status, color = LobbyMuted, fontSize = 12.sp)
                             }
@@ -184,18 +223,124 @@ class MainActivity : ComponentActivity() {
                                         Text("Scanning", color = LobbyGreen, fontSize = 11.sp)
                                     }
                                     if (nearbyDevices.isEmpty()) {
-                                        Text("No LoBBY devices found yet. Keep LoBBY open on the other device and start Receive.", color = LobbyMuted, fontSize = 13.sp)
+                                        Text("No nearby LoBBY devices yet. Turn on LoBBY on the other device and keep both devices on the same Wi-Fi or hotspot.", color = LobbyMuted, fontSize = 13.sp)
                                     } else {
                                         nearbyDevices.forEach { device ->
-                                            Column(Modifier.fillMaxWidth().clickable {
-                                                try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(device.baseUrl))) } catch (_: Exception) { status = "No browser available" }
-                                            }.padding(vertical = 6.dp)) {
-                                                Text(device.name, color = LobbyInk, fontWeight = FontWeight.SemiBold)
-                                                Text("${device.host}:${device.port}  ·  Open browser fallback", color = LobbyMuted, fontSize = 12.sp)
+                                            Surface(
+                                                modifier = Modifier.fillMaxWidth().clickable {
+                                                    selectedDevice = device
+                                                    transferStatus = if (selectedFiles.isEmpty()) "Choose files to send to ${device.name}" else "${selectedFiles.size} file(s) ready for ${device.name}"
+                                                    page = "send"
+                                                },
+                                                color = Color(0xFFF2F6F2),
+                                                shape = RoundedCornerShape(15.dp)
+                                            ) {
+                                                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                                    Column(Modifier.weight(1f)) {
+                                                        Text(device.name.removePrefix("LoBBY-"), color = LobbyInk, fontWeight = FontWeight.SemiBold)
+                                                        Text("LoBBY · Available · ${device.host}", color = LobbyMuted, fontSize = 12.sp)
+                                                    }
+                                                    Text("Send  →", color = LobbyGreen, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                                }
                                             }
                                         }
                                     }
-                                    Text("Discovery is local-network only. Native authenticated app-to-app sending is a later protocol phase; this opens the existing browser fallback.", color = LobbyMuted, fontSize = 11.sp)
+                                    Text("Tap a device to choose files and send them. Devices shown here have LoBBY sharing turned on.", color = LobbyMuted, fontSize = 11.sp)
+                                }
+                            }
+                        }
+
+                        if (page == "send") {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(onClick = { page = "home" }) { Text("← Home") }
+                                Spacer(Modifier.weight(1f))
+                                Text("SEND FILES", color = LobbyMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.1.sp)
+                            }
+                            Text("Send files", fontSize = 27.sp, fontWeight = FontWeight.Bold, color = LobbyInk)
+                            Text("Choose files, then select a nearby LoBBY device.", color = LobbyMuted, fontSize = 13.sp)
+
+                            Surface(color = LobbySurface, shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(17.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Text("FILES (${selectedFiles.size})", color = LobbyMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                                        TextButton(onClick = { sendFilePicker.launch(arrayOf("*/*")) }, enabled = !sending) { Text("+ Add files") }
+                                    }
+                                    if (selectedFiles.isEmpty()) {
+                                        Text("No files selected. Add files here, or use Android's Share menu and choose LoBBY.", color = LobbyMuted, fontSize = 13.sp)
+                                    } else {
+                                        selectedFiles.forEachIndexed { index, item ->
+                                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                                Column(Modifier.weight(1f)) {
+                                                    Text(item.name, color = LobbyInk, fontWeight = FontWeight.SemiBold, maxLines = 2)
+                                                    Text("${formatFileSize(item.size)} · ${item.mimeType}", color = LobbyMuted, fontSize = 11.sp)
+                                                }
+                                                TextButton(enabled = !sending, onClick = { selectedFiles = selectedFiles.filterIndexed { i, _ -> i != index } }) { Text("Remove") }
+                                            }
+                                            if (index != selectedFiles.lastIndex) HorizontalDivider(color = Color(0xFFE7ECE7))
+                                        }
+                                    }
+                                }
+                            }
+
+                            Surface(color = LobbySurface, shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(17.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Text("SEND TO", color = LobbyMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                                    if (nearbyDevices.isEmpty()) {
+                                        Text("Searching for LoBBY devices… Turn on LoBBY on the receiving device.", color = LobbyMuted, fontSize = 13.sp)
+                                    } else {
+                                        nearbyDevices.forEach { device ->
+                                            val isSelected = selectedDevice?.baseUrl == device.baseUrl
+                                            Surface(
+                                                modifier = Modifier.fillMaxWidth().clickable(enabled = !sending) {
+                                                    selectedDevice = device
+                                                    transferStatus = "Ready to send to ${device.name.removePrefix("LoBBY-")}"
+                                                },
+                                                color = if (isSelected) Color(0xFFE7F0E8) else Color(0xFFF5F7F5),
+                                                shape = RoundedCornerShape(13.dp)
+                                            ) {
+                                                Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                    Column(Modifier.weight(1f)) {
+                                                        Text(device.name.removePrefix("LoBBY-"), color = LobbyInk, fontWeight = FontWeight.SemiBold)
+                                                        Text("${device.host}:${device.port}", color = LobbyMuted, fontSize = 11.sp)
+                                                    }
+                                                    Text(if (isSelected) "Selected ✓" else "Select", color = LobbyGreen, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Button(
+                                        enabled = !sending && selectedFiles.isNotEmpty() && selectedDevice != null,
+                                        onClick = {
+                                            val target = selectedDevice ?: return@Button
+                                            sending = true
+                                            transferStatus = "Connecting to ${target.name.removePrefix("LoBBY-")}…"
+                                            sendFilesToDevice(target, selectedFiles) { message, complete ->
+                                                runOnUiThread {
+                                                    transferStatus = message
+                                                    sending = !complete
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(14.dp),
+                                        contentPadding = PaddingValues(vertical = 14.dp)
+                                    ) {
+                                        Text(if (sending) "Sending…" else "Send ${selectedFiles.size} file(s)", fontWeight = FontWeight.SemiBold)
+                                    }
+                                    if (sending) LinearProgressIndicator(Modifier.fillMaxWidth())
+                                    if (transferStatus.isNotBlank()) Text(transferStatus, color = LobbyMuted, fontSize = 12.sp)
+                                    selectedDevice?.let { target ->
+                                        OutlinedButton(
+                                            enabled = !sending,
+                                            onClick = {
+                                                try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target.baseUrl))) }
+                                                catch (_: Exception) { transferStatus = "No browser available to open this device" }
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            shape = RoundedCornerShape(13.dp)
+                                        ) { Text("Open this device in browser instead") }
+                                    }
+                                    Text("Both devices must be on the same local network. Files are sent through LoBBY's existing HTTP transfer API.", color = LobbyMuted, fontSize = 11.sp)
                                 }
                             }
                         }
@@ -315,12 +460,116 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        incomingShareHandler?.invoke(intent)
+    }
+
+    private fun readSharedItems(source: Intent?): List<SharedItem> {
+        if (source == null) return emptyList()
+        val uris = mutableListOf<Uri>()
+        when (source.action) {
+            Intent.ACTION_SEND -> {
+                (source.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))?.let(uris::add)
+                source.data?.let(uris::add)
+            }
+            Intent.ACTION_SEND_MULTIPLE -> {
+                @Suppress("DEPRECATION")
+                val streams = source.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+                streams?.let(uris::addAll)
+            }
+        }
+        source.clipData?.let { clip ->
+            for (index in 0 until clip.itemCount) clip.getItemAt(index).uri?.let(uris::add)
+        }
+        return uris.distinctBy { it.toString() }.map { describeSharedItem(it) }
+    }
+
+    private fun describeSharedItem(uri: Uri): SharedItem {
+        var name = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "shared-file"
+        var size = -1L
+        try {
+            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (nameIndex >= 0) cursor.getString(nameIndex)?.takeIf { it.isNotBlank() }?.let { name = it }
+                    if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) size = cursor.getLong(sizeIndex)
+                }
+            }
+        } catch (_: Exception) { }
+        name = name.replace("/", "_").replace("\\", "_").takeUnless { it == "." || it == ".." }.orEmpty().ifBlank { "shared-file" }
+        return SharedItem(uri, name, contentResolver.getType(uri) ?: "application/octet-stream", size)
+    }
+
+    private fun sendFilesToDevice(
+        device: LobbyDiscovery.Device,
+        files: List<SharedItem>,
+        onProgress: (String, Boolean) -> Unit
+    ) {
+        Thread {
+            try {
+                files.forEachIndexed { index, item ->
+                    onProgress("Sending ${index + 1} of ${files.size}: ${item.name}", false)
+                    var stagedFile: File? = null
+                    try {
+                        val uploadSize = if (item.size >= 0) item.size else {
+                            stagedFile = File.createTempFile("lobby-share-", ".tmp", cacheDir)
+                            contentResolver.openInputStream(item.uri)?.use { input ->
+                                stagedFile!!.outputStream().use { output -> input.copyTo(output, 256 * 1024) }
+                            } ?: throw IOException("Cannot open ${item.name}")
+                            stagedFile!!.length()
+                        }
+                        val encodedName = URLEncoder.encode(item.name, "UTF-8").replace("+", "%20")
+                        val endpoint = "${device.baseUrl}${device.sharePath.trimEnd('/')}/$encodedName"
+                        val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+                            requestMethod = "PUT"
+                            doOutput = true
+                            connectTimeout = 15_000
+                            readTimeout = 60_000
+                            setRequestProperty("Content-Type", item.mimeType)
+                            setRequestProperty("Connection", "close")
+                            setFixedLengthStreamingMode(uploadSize)
+                        }
+                        try {
+                            val input = stagedFile?.inputStream() ?: contentResolver.openInputStream(item.uri)
+                                ?: throw IOException("Cannot open ${item.name}")
+                            input.use { source ->
+                                connection.outputStream.use { output ->
+                                    val buffer = ByteArray(256 * 1024)
+                                    while (true) {
+                                        val count = source.read(buffer)
+                                        if (count < 0) break
+                                        output.write(buffer, 0, count)
+                                    }
+                                }
+                            }
+                            val response = connection.responseCode
+                            if (response !in 200..299) {
+                                val detail = try { connection.errorStream?.bufferedReader()?.use { it.readText() } } catch (_: Exception) { null }
+                                throw IOException("${item.name}: HTTP $response${detail?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""}")
+                            }
+                        } finally {
+                            connection.disconnect()
+                        }
+                    } finally {
+                        stagedFile?.delete()
+                    }
+                }
+                onProgress("Transfer complete · ${files.size} file(s) sent", true)
+            } catch (error: Exception) {
+                onProgress("Transfer failed: ${error.message ?: "Connection error"}", true)
+            }
+        }.start()
+    }
+
     /** Returns false below Android 11 without invoking an API unavailable on those versions. */
     private fun hasAllFilesAccess(): Boolean {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()
     }
 
-    override fun onDestroy() { server?.stop(); server = null; discovery.stop(); super.onDestroy() }
+    override fun onDestroy() { incomingShareHandler = null; server?.stop(); server = null; discovery.stop(); super.onDestroy() }
 
     private fun lanIp(): String? {
         return try {
@@ -347,6 +596,16 @@ class MainActivity : ComponentActivity() {
 }
 
 
+private fun formatFileSize(size: Long): String {
+    if (size < 0) return "Size unavailable"
+    if (size < 1024) return "$size B"
+    val kb = size / 1024.0
+    if (kb < 1024) return String.format("%.1f KB", kb)
+    val mb = kb / 1024.0
+    if (mb < 1024) return String.format("%.1f MB", mb)
+    return String.format("%.2f GB", mb / 1024.0)
+}
+
 @Composable
 private fun InfoPage(page: String, modifier: Modifier = Modifier) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -364,7 +623,7 @@ private fun InfoPage(page: String, modifier: Modifier = Modifier) {
                     InfoHeading("Connect devices")
                     Text("For now, connect both devices to the same Wi-Fi network or to the same manually created hotspot. Internet access is not required.")
                     InfoHeading("Device discovery")
-                    Text("Keep LoBBY open on both devices. On the receiving Android device, start sharing so it can advertise its LoBBY service on the local network.")
+                    Text("Turn on LoBBY on the receiving device so it can advertise its service. On the sending device, tap the discovered device or share files to LoBBY from Android’s Share menu.")
                     InfoHeading("Can't find another device?")
                     Text("Check that both devices are on the same network, that the router allows communication between clients, and that local-network access is not blocked by a guest network or firewall.")
                     InfoHeading("Browser compatibility")
@@ -374,7 +633,7 @@ private fun InfoPage(page: String, modifier: Modifier = Modifier) {
                 } else {
                     InfoHeading("The project")
                     Text("LoBBY by Code-xed is a local-first file sharing project. Its direction is a shared, cross-platform transfer protocol with platform-specific networking adapters for Android, iOS and desktop systems.")
-                    Text("Current Android builds provide a local HTTP server, browser compatibility and local-network service discovery. Native authenticated app-to-app transfers are being developed separately.", color = LobbyMuted)
+                    Text("Android builds provide a local HTTP server, native file selection and Share Sheet intake, mDNS discovery, and native sending through the same HTTP API used by the browser interface.", color = LobbyMuted)
                     Button(onClick = { openLink("https://github.com/Code-xed/Local-Bridge") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("View LoBBY on GitHub") }
 
                     InfoHeading("Privacy and network access")
