@@ -562,7 +562,10 @@ class LocalBridgeServer(
             LobbyNotifications.show(context, transferId.hashCode(), "Incoming LoBBY transfer", "$senderName: ${files.size} file(s) · ${formatBytes(total)}", transferId, openInbox = false)
         }
         onTransferChanged?.invoke()
-        return jsonResponse(JSONObject().put("transferId", transferId).put("status", transfer.state))
+        return jsonResponse(JSONObject().put("transferId", transferId).put("status", transfer.state)).apply {
+            // Do not let NanoHTTPD reuse a socket after consuming a JSON request body.
+            addHeader("Connection", "close")
+        }
     }
 
     fun decideTransferLocally(id: String, accept: Boolean): String {

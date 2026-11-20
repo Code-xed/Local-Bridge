@@ -485,6 +485,10 @@ internal class NativeTransferClient(context: Context) {
         val connection = URL(url).openConnection() as HttpURLConnection
         try {
             connection.requestMethod = method
+            // NanoHTTPD 2.3.1 can misparse a subsequent request when a JSON POST
+            // body and a keep-alive socket are reused. Isolate each API exchange.
+            connection.setRequestProperty("Connection", "close")
+            connection.useCaches = false
             if (sessionKey != null) {
                 val requestPath = URL(url).path
                 connection.setRequestProperty("X-LoBBY-Session", TransferCrypto.createSessionAuthHeader(sessionKey, method, requestPath))

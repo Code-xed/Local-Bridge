@@ -527,7 +527,9 @@ class MainActivity : ComponentActivity() {
                                         contentPadding = PaddingValues(vertical = 14.dp)
                                     ) { Text(if (sending) "Sending…" else "Send ${selectedFiles.size} file(s)", fontWeight = FontWeight.SemiBold) }
                                     transferProgress?.let { progress ->
-                                        val fraction = if (progress.finished) 1f else if (progress.totalBytes > 0L) (progress.transferredBytes.toFloat() / progress.totalBytes).coerceIn(0f, 1f) else 0f
+                                        val fraction = if (progress.error != null) {
+                                            if (progress.totalBytes > 0L) (progress.transferredBytes.toFloat() / progress.totalBytes).coerceIn(0f, 1f) else 0f
+                                        } else if (progress.finished) 1f else if (progress.totalBytes > 0L) (progress.transferredBytes.toFloat() / progress.totalBytes).coerceIn(0f, 1f) else 0f
                                         LinearProgressIndicator(progress = fraction, modifier = Modifier.fillMaxWidth())
                                         Text("${(fraction * 100).toInt()}% · ${formatFileSize(progress.transferredBytes)} / ${formatFileSize(progress.totalBytes)}", color = LobbyInk, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                                         if (progress.currentFile.isNotBlank() && !progress.finished) {
@@ -535,7 +537,13 @@ class MainActivity : ComponentActivity() {
                                         }
                                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                             Text(formatSpeed(progress.speedBytesPerSecond), color = LobbyGreen, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                            Text(progress.etaSeconds?.let { "${formatDuration(it)} left" } ?: "Calculating ETA…", color = LobbyMuted, fontSize = 12.sp)
+                                            val etaLabel = when {
+                                                progress.error != null -> "Failed"
+                                                progress.etaSeconds != null -> "${formatDuration(progress.etaSeconds)} left"
+                                                progress.transferredBytes <= 0L -> "Waiting to start"
+                                                else -> "Estimating ETA…"
+                                            }
+                                            Text(etaLabel, color = LobbyMuted, fontSize = 12.sp)
                                         }
                                         progress.fileBytes.forEachIndexed { index, transferred ->
                                             val item = selectedFiles.getOrNull(index) ?: return@forEachIndexed
