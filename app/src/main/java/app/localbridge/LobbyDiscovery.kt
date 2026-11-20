@@ -37,10 +37,10 @@ class LobbyDiscovery(context: Context) {
     fun advertise(port: Int, deviceName: String = "LoBBY Android", sharePath: String = "/files") {
         stopAdvertising()
         val service = NsdServiceInfo().apply {
-            serviceName = deviceName.take(50)
-            serviceType = SERVICE_TYPE
-            setPort(port)
-            setAttribute("path", sharePath))
+    serviceName = deviceName.take(50)
+    serviceType = SERVICE_TYPE
+    setPort(port)
+    setAttribute("path", sharePath)
         }
         val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(info: NsdServiceInfo) = Unit
