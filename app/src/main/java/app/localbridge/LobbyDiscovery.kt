@@ -40,7 +40,7 @@ class LobbyDiscovery(context: Context) {
             serviceName = deviceName.take(50)
             serviceType = SERVICE_TYPE
             setPort(port)
-            setAttribute("path", sharePath.toByteArray(Charsets.UTF_8))
+            setAttribute("path", sharePath))
         }
         val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(info: NsdServiceInfo) = Unit
