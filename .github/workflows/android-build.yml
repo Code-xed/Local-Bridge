@@ -45,6 +45,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
+
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -96,6 +97,10 @@ jobs:
           echo "LOBBY_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
 
       - name: Build signed release APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: >-
           gradle --no-daemon clean :app:assembleRelease
           -PversionCode=${{ steps.version.outputs.version_code }}
